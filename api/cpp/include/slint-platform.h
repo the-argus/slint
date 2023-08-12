@@ -243,12 +243,6 @@ public:
 /// Can only be called once in an application.
 inline void set_platform(std::unique_ptr<Platform> platform)
 {
-    struct MutStringView
-    {
-        uint8_t *data;
-        size_t size;
-    };
-
     cbindgen_private::slint_platform_register(
             platform.release(), [](void *p) { delete reinterpret_cast<const Platform *>(p); },
             [](void *p, cbindgen_private::WindowAdapterRcOpaque *out) {
@@ -270,13 +264,16 @@ inline void set_platform(std::unique_ptr<Platform> platform)
                         std::string_view(reinterpret_cast<const char *>(text), size),
                         Platform::Clipboard(clipboard));
             },
-            [](void *p, uint8_t clipboard) -> MutStringView {
+            [](void *p, uint8_t clipboard) -> slint::cbindgen_private::MutStringView {
                 auto maybe_clipboard = reinterpret_cast<Platform *>(p)->clipboard_text(
                         Platform::Clipboard(clipboard));
+
                 if (!maybe_clipboard)
                     return { nullptr, 0 };
 
-                return { const_cast<uint8_t *>(maybe_clipboard->data()), maybe_clipboard->size() };
+                return { const_cast<uint8_t *>(
+                                 reinterpret_cast<const uint8_t *>(maybe_clipboard->data())),
+                         maybe_clipboard->size() };
             },
             [](void *p) { return reinterpret_cast<Platform *>(p)->run_event_loop(); },
             [](void *p) { return reinterpret_cast<Platform *>(p)->quit_event_loop(); },
