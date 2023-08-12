@@ -20,6 +20,12 @@ pub struct RendererPtr {
     _b: *const c_void,
 }
 
+#[repr(C)]
+pub struct MutStringView {
+    data: *mut u8,
+    size: usize,
+}
+
 pub struct CppWindowAdapter {
     window: Window,
     user_data: WindowAdapterUserData,
@@ -92,10 +98,8 @@ struct CppPlatform {
     window_factory: unsafe extern "C" fn(PlatformUserData, *mut WindowAdapterRcOpaque),
     #[cfg(not(feature = "std"))]
     duration_since_start: unsafe extern "C" fn(PlatformUserData) -> u64,
-    set_clipboard_text:
-        unsafe extern "C" fn(PlatformUserData, i_slint_core::SharedString, _clipboard: u8),
-    clipboard_text:
-        unsafe extern "C" fn(PlatformUserData, _clipboard: u8) -> i_slint_core::SharedString,
+    set_clipboard_text: unsafe extern "C" fn(PlatformUserData, *const u8, usize, _clipboard: u8),
+    clipboard_text: unsafe extern "C" fn(PlatformUserData, _clipboard: u8) -> MutStringView,
     run_event_loop: unsafe extern "C" fn(PlatformUserData),
     quit_event_loop: unsafe extern "C" fn(PlatformUserData),
     invoke_from_event_loop: unsafe extern "C" fn(PlatformUserData, PlatformTaskOpaque),
@@ -138,12 +142,19 @@ impl Platform for CppPlatform {
     }
 
     fn set_clipboard_text(&self, _text: &str, _clipboard: Clipboard) {
-        unsafe { (self.set_clipboard_text)(self.user_data, _text.into(), _clipboard as u8) }
+        unsafe {
+            (self.set_clipboard_text)(self.user_data, _text.as_ptr(), _text.len(), _clipboard as u8)
+        }
     }
 
     fn clipboard_text(&self, _clipboard: Clipboard) -> Option<String> {
-        let optstr = unsafe { (self.clipboard_text)(self.user_data, _clipboard as u8) };
-        (!optstr.is_empty()).then(|| optstr.into())
+        let opt_cstr = unsafe { (self.clipboard_text)(self.user_data, _clipboard as u8) };
+
+        if opt_cstr.data.is_null() {
+            return None;
+        }
+
+        unsafe { String::from_raw_parts(opt_cstr.data, opt_cstr.size, opt_cstr.size).into() }
     }
 }
 
@@ -182,15 +193,8 @@ pub unsafe extern "C" fn slint_platform_register(
     drop: unsafe extern "C" fn(PlatformUserData),
     window_factory: unsafe extern "C" fn(PlatformUserData, *mut WindowAdapterRcOpaque),
     #[allow(unused)] duration_since_start: unsafe extern "C" fn(PlatformUserData) -> u64,
-    set_clipboard_text: unsafe extern "C" fn(
-        PlatformUserData,
-        i_slint_core::SharedString,
-        _clipboard: u8,
-    ),
-    clipboard_text: unsafe extern "C" fn(
-        PlatformUserData,
-        _clipboard: u8,
-    ) -> i_slint_core::SharedString,
+    set_clipboard_text: unsafe extern "C" fn(PlatformUserData, *const u8, usize, _clipboard: u8),
+    clipboard_text: unsafe extern "C" fn(PlatformUserData, _clipboard: u8) -> MutStringView,
     run_event_loop: unsafe extern "C" fn(PlatformUserData),
     quit_event_loop: unsafe extern "C" fn(PlatformUserData),
     invoke_from_event_loop: unsafe extern "C" fn(PlatformUserData, PlatformTaskOpaque),
