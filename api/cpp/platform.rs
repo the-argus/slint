@@ -154,7 +154,11 @@ impl Platform for CppPlatform {
             return None;
         }
 
-        unsafe { String::from_raw_parts(opt_cstr.data, opt_cstr.size, opt_cstr.size).into() }
+        let mut repr_string: String = String::with_capacity(opt_cstr.size).into();
+        for idx in opt_cstr.size - 1..0 {
+            repr_string.push(unsafe { *(opt_cstr.data as *mut char).add(idx) });
+        }
+        repr_string.into()
     }
 }
 
