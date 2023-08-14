@@ -140,6 +140,7 @@ public:
 class Platform
 {
 public:
+    using Clipboard = cbindgen_private::Clipboard;
     virtual ~Platform() = default;
     Platform(const Platform &) = delete;
     Platform &operator=(const Platform &) = delete;
@@ -147,14 +148,6 @@ public:
 
     /// Returns a new WindowAdapter
     virtual std::unique_ptr<WindowAdapter> create_window_adapter() = 0;
-
-    // see internal/core/platform.rs
-    enum class Clipboard : uint8_t {
-        /// Secondary clipboard on X11.
-        DefaultClipboard = 0,
-        /// Primary clipboard on X11.
-        SelectionClipboard = 1,
-    };
 
 #ifndef SLINT_FEATURE_STD
     /// Returns the amount of milliseconds since start of the application.
