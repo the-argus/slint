@@ -21,8 +21,8 @@ pub struct RendererPtr {
 }
 
 #[repr(C)]
-pub struct MutStringView {
-    data: *mut u8,
+pub struct StringView {
+    data: *const u8,
     size: usize,
 }
 
@@ -99,7 +99,7 @@ struct CppPlatform {
     #[cfg(not(feature = "std"))]
     duration_since_start: unsafe extern "C" fn(PlatformUserData) -> u64,
     set_clipboard_text: unsafe extern "C" fn(PlatformUserData, *const u8, usize, _clipboard: u8),
-    clipboard_text: unsafe extern "C" fn(PlatformUserData, _clipboard: u8) -> MutStringView,
+    clipboard_text: unsafe extern "C" fn(PlatformUserData, _clipboard: u8) -> StringView,
     run_event_loop: unsafe extern "C" fn(PlatformUserData),
     quit_event_loop: unsafe extern "C" fn(PlatformUserData),
     invoke_from_event_loop: unsafe extern "C" fn(PlatformUserData, PlatformTaskOpaque),
@@ -148,17 +148,21 @@ impl Platform for CppPlatform {
     }
 
     fn clipboard_text(&self, _clipboard: Clipboard) -> Option<String> {
-        let opt_cstr = unsafe { (self.clipboard_text)(self.user_data, _clipboard as u8) };
+        let opt_str = unsafe { (self.clipboard_text)(self.user_data, _clipboard as u8) };
 
-        if opt_cstr.data.is_null() {
+        if opt_str.data.is_null() {
             return None;
         }
 
-        let mut repr_string: String = String::with_capacity(opt_cstr.size).into();
-        for idx in opt_cstr.size - 1..0 {
-            repr_string.push(unsafe { *(opt_cstr.data as *mut char).add(idx) });
+        let str =
+            std::str::from_utf8(unsafe { std::slice::from_raw_parts(opt_str.data, opt_str.size) });
+
+        if str.is_err() {
+            // TODO: log warning
+            None
+        } else {
+            String::from(str.unwrap()).into()
         }
-        repr_string.into()
     }
 }
 
@@ -198,7 +202,7 @@ pub unsafe extern "C" fn slint_platform_register(
     window_factory: unsafe extern "C" fn(PlatformUserData, *mut WindowAdapterRcOpaque),
     #[allow(unused)] duration_since_start: unsafe extern "C" fn(PlatformUserData) -> u64,
     set_clipboard_text: unsafe extern "C" fn(PlatformUserData, *const u8, usize, _clipboard: u8),
-    clipboard_text: unsafe extern "C" fn(PlatformUserData, _clipboard: u8) -> MutStringView,
+    clipboard_text: unsafe extern "C" fn(PlatformUserData, _clipboard: u8) -> StringView,
     run_event_loop: unsafe extern "C" fn(PlatformUserData),
     quit_event_loop: unsafe extern "C" fn(PlatformUserData),
     invoke_from_event_loop: unsafe extern "C" fn(PlatformUserData, PlatformTaskOpaque),

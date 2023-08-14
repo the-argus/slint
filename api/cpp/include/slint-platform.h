@@ -264,15 +264,14 @@ inline void set_platform(std::unique_ptr<Platform> platform)
                         std::string_view(reinterpret_cast<const char *>(text), size),
                         Platform::Clipboard(clipboard));
             },
-            [](void *p, uint8_t clipboard) -> slint::cbindgen_private::MutStringView {
+            [](void *p, uint8_t clipboard) -> slint::cbindgen_private::StringView {
                 auto maybe_clipboard = reinterpret_cast<Platform *>(p)->clipboard_text(
                         Platform::Clipboard(clipboard));
 
                 if (!maybe_clipboard)
                     return { nullptr, 0 };
 
-                return { const_cast<uint8_t *>(
-                                 reinterpret_cast<const uint8_t *>(maybe_clipboard->data())),
+                return { reinterpret_cast<const uint8_t *>(maybe_clipboard->data()),
                          maybe_clipboard->size() };
             },
             [](void *p) { return reinterpret_cast<Platform *>(p)->run_event_loop(); },
