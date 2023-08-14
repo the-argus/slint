@@ -268,7 +268,7 @@ inline void set_platform(std::unique_ptr<Platform> platform)
                         Platform::Clipboard(clipboard));
 
                 if (maybe_clipboard)
-                    out_text = std::move(*maybe_clipboard)
+                    *out_text = maybe_clipboard.value();
             },
             [](void *p) { return reinterpret_cast<Platform *>(p)->run_event_loop(); },
             [](void *p) { return reinterpret_cast<Platform *>(p)->quit_event_loop(); },
