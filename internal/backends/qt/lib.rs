@@ -241,7 +241,6 @@ impl i_slint_core::platform::Platform for Backend {
         let is_selection: bool = match _clipboard {
             i_slint_core::platform::Clipboard::DefaultClipboard => false,
             i_slint_core::platform::Clipboard::SelectionClipboard => true,
-            _ => return,
         };
         let text: qttypes::QString = _text.into();
         cpp! {unsafe [text as "QString", is_selection as "bool"] {
@@ -256,7 +255,6 @@ impl i_slint_core::platform::Platform for Backend {
         let is_selection: bool = match _clipboard {
             i_slint_core::platform::Clipboard::DefaultClipboard => false,
             i_slint_core::platform::Clipboard::SelectionClipboard => true,
-            _ => return None,
         };
         let has_text = cpp! {unsafe [is_selection as "bool"] -> bool as "bool" {
             ensure_initialized();

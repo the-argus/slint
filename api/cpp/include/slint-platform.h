@@ -250,13 +250,11 @@ inline void set_platform(std::unique_ptr<Platform> platform)
                 return reinterpret_cast<const Platform *>(p)->duration_since_start().count();
 #endif
             },
-            [](void *p, const SharedString *text, uint8_t clipboard) {
-                reinterpret_cast<Platform *>(p)->set_clipboard_text(*text,
-                                                                    Platform::Clipboard(clipboard));
+            [](void *p, const SharedString *text, Platform::Clipboard clipboard) {
+                reinterpret_cast<Platform *>(p)->set_clipboard_text(*text, clipboard);
             },
-            [](void *p, SharedString *out_text, uint8_t clipboard) -> bool {
-                auto maybe_clipboard = reinterpret_cast<Platform *>(p)->clipboard_text(
-                        Platform::Clipboard(clipboard));
+            [](void *p, SharedString *out_text, Platform::Clipboard clipboard) -> bool {
+                auto maybe_clipboard = reinterpret_cast<Platform *>(p)->clipboard_text(clipboard);
 
                 bool status = maybe_clipboard.has_value();
                 if (status)

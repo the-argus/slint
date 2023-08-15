@@ -105,7 +105,6 @@ impl EventLoopInterface for NotRunningEventLoop {
             corelib::platform::Clipboard::SelectionClipboard => {
                 Some(RefMut::map(self.clipboard.borrow_mut(), |p| p.1.as_mut()))
             }
-            _ => None,
         }
     }
 }
@@ -130,7 +129,6 @@ impl<'a> EventLoopInterface for RunningEventLoop<'a> {
             corelib::platform::Clipboard::SelectionClipboard => {
                 Some(RefMut::map(self.clipboard.borrow_mut(), |p| p.1.as_mut()))
             }
-            _ => None,
         }
     }
 }

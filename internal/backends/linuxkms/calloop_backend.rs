@@ -240,7 +240,6 @@ impl i_slint_core::platform::Platform for Backend {
             i_slint_core::platform::Clipboard::SelectionClipboard => {
                 self.sel_clipboard.borrow().clone()
             }
-            _ => None,
         }
     }
     fn set_clipboard_text(&self, text: &str, clipboard: i_slint_core::platform::Clipboard) {

@@ -93,9 +93,8 @@ struct CppPlatform {
     window_factory: unsafe extern "C" fn(PlatformUserData, *mut WindowAdapterRcOpaque),
     #[cfg(not(feature = "std"))]
     duration_since_start: unsafe extern "C" fn(PlatformUserData) -> u64,
-    set_clipboard_text: unsafe extern "C" fn(PlatformUserData, &SharedString, _clipboard: u8),
-    clipboard_text:
-        unsafe extern "C" fn(PlatformUserData, &mut SharedString, _clipboard: u8) -> bool,
+    set_clipboard_text: unsafe extern "C" fn(PlatformUserData, &SharedString, Clipboard),
+    clipboard_text: unsafe extern "C" fn(PlatformUserData, &mut SharedString, Clipboard) -> bool,
     run_event_loop: unsafe extern "C" fn(PlatformUserData),
     quit_event_loop: unsafe extern "C" fn(PlatformUserData),
     invoke_from_event_loop: unsafe extern "C" fn(PlatformUserData, PlatformTaskOpaque),
@@ -139,13 +138,12 @@ impl Platform for CppPlatform {
 
     fn set_clipboard_text(&self, _text: &str, _clipboard: Clipboard) {
         let shared_text = SharedString::from(_text);
-        unsafe { (self.set_clipboard_text)(self.user_data, &shared_text, _clipboard as u8) }
+        unsafe { (self.set_clipboard_text)(self.user_data, &shared_text, _clipboard) }
     }
 
     fn clipboard_text(&self, _clipboard: Clipboard) -> Option<String> {
         let mut out_text = SharedString::new();
-        let status =
-            unsafe { (self.clipboard_text)(self.user_data, &mut out_text, _clipboard as u8) };
+        let status = unsafe { (self.clipboard_text)(self.user_data, &mut out_text, _clipboard) };
 
         if !status {
             None
@@ -190,12 +188,8 @@ pub unsafe extern "C" fn slint_platform_register(
     drop: unsafe extern "C" fn(PlatformUserData),
     window_factory: unsafe extern "C" fn(PlatformUserData, *mut WindowAdapterRcOpaque),
     #[allow(unused)] duration_since_start: unsafe extern "C" fn(PlatformUserData) -> u64,
-    set_clipboard_text: unsafe extern "C" fn(PlatformUserData, &SharedString, _clipboard: u8),
-    clipboard_text: unsafe extern "C" fn(
-        PlatformUserData,
-        &mut SharedString,
-        _clipboard: u8,
-    ) -> bool,
+    set_clipboard_text: unsafe extern "C" fn(PlatformUserData, &SharedString, Clipboard),
+    clipboard_text: unsafe extern "C" fn(PlatformUserData, &mut SharedString, Clipboard) -> bool,
     run_event_loop: unsafe extern "C" fn(PlatformUserData),
     quit_event_loop: unsafe extern "C" fn(PlatformUserData),
     invoke_from_event_loop: unsafe extern "C" fn(PlatformUserData, PlatformTaskOpaque),
