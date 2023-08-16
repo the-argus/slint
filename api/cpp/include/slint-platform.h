@@ -497,6 +497,11 @@ public:
         inner = cbindgen_private::slint_skia_renderer_new(window_handle.inner, initial_size);
     }
 
+    size_t instance_handle() const
+    {
+        return cbindgen_private::slint_skia_renderer_raw_vulkan_instance_handle(inner);
+    }
+
     /// Renders the scene into the window provided to the SkiaRenderer's constructor.
     void render() const { cbindgen_private::slint_skia_renderer_render(inner); }
 };

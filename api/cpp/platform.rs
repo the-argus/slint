@@ -436,6 +436,14 @@ pub mod skia {
         Box::into_raw(boxed_renderer) as SkiaRendererOpaque
     }
 
+    #[cfg(skia_backend_vulkan)]
+    #[no_mangle]
+    pub unsafe extern "C" fn slint_skia_renderer_raw_vulkan_instance_handle(r: SkiaRendererOpaque) -> usize {
+        let r = &*(r as *const SkiaRenderer);
+        let vulkan_surface: &VulkanSurface = r.surface.as_any();
+        return vulkan_surface.raw_vulkan_instance_handle();
+    }
+
     #[no_mangle]
     pub unsafe extern "C" fn slint_skia_renderer_drop(r: SkiaRendererOpaque) {
         drop(Box::from_raw(r as *mut SkiaRenderer))

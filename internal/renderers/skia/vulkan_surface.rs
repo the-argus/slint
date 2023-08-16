@@ -32,6 +32,7 @@ pub struct VulkanSurface {
     swapchain: RefCell<Arc<Swapchain>>,
     swapchain_images: RefCell<Vec<Arc<SwapchainImage>>>,
     swapchain_image_views: RefCell<Vec<Arc<ImageView<SwapchainImage>>>>,
+    instance_handle: usize,
 }
 
 impl VulkanSurface {
@@ -126,9 +127,11 @@ impl VulkanSurface {
             }
         };
 
+        let instance_handle: usize = instance.handle().as_raw();
+
         let backend_context = unsafe {
             skia_safe::gpu::vk::BackendContext::new(
-                instance.handle().as_raw() as _,
+                instance_handle as _,
                 physical_device.handle().as_raw() as _,
                 device.handle().as_raw() as _,
                 (queue.handle().as_raw() as _, queue.id_within_family() as _),
@@ -150,7 +153,12 @@ impl VulkanSurface {
             swapchain: RefCell::new(swapchain),
             swapchain_images: RefCell::new(swapchain_images),
             swapchain_image_views: RefCell::new(swapchain_image_views),
+            instance_handle,
         })
+    }
+
+    fn raw_vulkan_instance_handle(&self) -> usize {
+        return self.instance_handle;
     }
 
     /// Returns a clone of the shared swapchain.
