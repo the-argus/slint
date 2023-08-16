@@ -127,7 +127,7 @@ impl VulkanSurface {
             }
         };
 
-        let instance_handle: usize = instance.handle().as_raw();
+        let instance_handle: usize = instance.handle().as_raw().try_into().unwrap();
 
         let backend_context = unsafe {
             skia_safe::gpu::vk::BackendContext::new(
