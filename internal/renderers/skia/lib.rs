@@ -79,6 +79,10 @@ impl SkiaRenderer {
         Ok(Self::new_with_surface(surface))
     }
 
+    pub fn surface(&self) -> &dyn Surface {
+        return self.surface.as_ref();
+    }
+
     /// Creates a new renderer with the given surface trait implementation.
     pub fn new_with_surface(surface: impl Surface + 'static) -> Self {
         Self {

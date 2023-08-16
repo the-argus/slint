@@ -157,7 +157,7 @@ impl VulkanSurface {
         })
     }
 
-    fn raw_vulkan_instance_handle(&self) -> usize {
+    pub fn raw_vulkan_instance_handle(&self) -> usize {
         return self.instance_handle;
     }
 
