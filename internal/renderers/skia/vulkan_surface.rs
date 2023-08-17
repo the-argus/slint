@@ -35,6 +35,14 @@ pub struct VulkanSurface {
     instance_handle: usize,
 }
 
+/// Rendering behaviors that can be used by a vulkan skia surface.
+#[repr(u8)]
+pub enum RenderType {
+    #[default]
+    Direct,
+    OffscreenAsychronous,
+}
+
 impl VulkanSurface {
     /// Creates a Skia Vulkan rendering surface from the given Vukano device, queue family index, surface,
     /// and size.
@@ -172,6 +180,7 @@ impl super::Surface for VulkanSurface {
         window_handle: raw_window_handle::WindowHandle<'_>,
         display_handle: raw_window_handle::DisplayHandle<'_>,
         size: PhysicalWindowSize,
+        render_type: RenderType,
     ) -> Result<Self, i_slint_core::platform::PlatformError> {
         let library = VulkanLibrary::new()
             .map_err(|load_err| format!("Error loading vulkan library: {load_err}"))?;

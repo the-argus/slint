@@ -73,8 +73,15 @@ impl SkiaRenderer {
         window_handle: raw_window_handle::WindowHandle<'_>,
         display_handle: raw_window_handle::DisplayHandle<'_>,
         size: PhysicalWindowSize,
+        #[cfg(skia_backend_vulkan)] render_type: vulkan_surface::RenderType,
     ) -> Result<Self, PlatformError> {
-        let surface = DefaultSurface::new(window_handle, display_handle, size)?;
+        cfg_if::cfg_if! {
+            if #[cfg(skia_backend_vulkan)] {
+                let surface = DefaultSurface::new(window_handle, display_handle, size, render_type)?;
+            } else {
+                let surface = DefaultSurface::new(window_handle, display_handle, size)?;
+            }
+        }
 
         Ok(Self::new_with_surface(surface))
     }
@@ -395,6 +402,7 @@ pub trait Surface {
         window_handle: raw_window_handle::WindowHandle<'_>,
         display_handle: raw_window_handle::DisplayHandle<'_>,
         size: PhysicalWindowSize,
+        #[cfg(skia_backend_vulkan)] render_mode: vulkan_surface::RenderType,
     ) -> Result<Self, PlatformError>
     where
         Self: Sized;
