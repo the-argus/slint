@@ -3,6 +3,7 @@
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
+use ash::vk::Handle;
 use core::ffi::c_void;
 use i_slint_core::api::{PhysicalSize, Window};
 use i_slint_core::graphics::IntSize;
@@ -438,16 +439,28 @@ pub mod skia {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn slint_skia_renderer_raw_vulkan_instance_handle(r: SkiaRendererOpaque) -> u64 {
+    pub unsafe extern "C" fn slint_skia_renderer_raw_vulkan_instance_handle(
+        r: SkiaRendererOpaque,
+    ) -> u64 {
         let r = &*(r as *const SkiaRenderer);
-        let vulkan_surface = r.surface().as_any().downcast_ref::<VulkanSurface>().expect("vulkan backend not in use");
+        let vulkan_surface = r
+            .surface()
+            .as_any()
+            .downcast_ref::<VulkanSurface>()
+            .expect("vulkan backend not in use");
         return vulkan_surface.raw_vulkan_instance_handle().as_raw();
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn slint_skia_renderer_raw_vulkan_current_frame_handle(r: SkiaRendererOpaque) -> u64 {
+    pub unsafe extern "C" fn slint_skia_renderer_raw_vulkan_current_frame_handle(
+        r: SkiaRendererOpaque,
+    ) -> u64 {
         let r = &*(r as *const SkiaRenderer);
-        let vulkan_surface = r.surface().as_any().downcast_ref::<VulkanSurface>().expect("vulkan backend not in use");
+        let vulkan_surface = r
+            .surface()
+            .as_any()
+            .downcast_ref::<VulkanSurface>()
+            .expect("vulkan backend not in use");
         return vulkan_surface.current_raw_offscreen_vulkan_image_handle().as_raw();
     }
 
