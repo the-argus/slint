@@ -142,12 +142,16 @@ impl VulkanSurface {
         })
     }
 
-    pub fn raw_vulkan_instance_handle(&self) -> ash::vk::Instance {
-        return self.instance_handle;
+    pub fn raw_vulkan_instance_handle(&self) -> u64 {
+        return self.instance_handle.as_raw();
     }
 
-    pub fn current_raw_offscreen_vulkan_image_handle(&self) -> ash::vk::Image {
-        self.images.clone().take()[self.current_vulkan_frame_index()].inner().image.handle()
+    pub fn current_raw_offscreen_vulkan_image_handle(&self) -> u64 {
+        self.images.clone().take()[self.current_vulkan_frame_index()]
+            .inner()
+            .image
+            .handle()
+            .as_raw()
     }
 
     fn current_vulkan_frame_index(&self) -> usize {

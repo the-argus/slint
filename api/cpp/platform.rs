@@ -3,7 +3,6 @@
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
-use ash::vk::Handle;
 use core::ffi::c_void;
 use i_slint_core::api::{PhysicalSize, Window};
 use i_slint_core::graphics::IntSize;
@@ -448,7 +447,7 @@ pub mod skia {
             .as_any()
             .downcast_ref::<VulkanSurface>()
             .expect("vulkan backend not in use");
-        return vulkan_surface.raw_vulkan_instance_handle().as_raw();
+        return vulkan_surface.raw_vulkan_instance_handle();
     }
 
     #[no_mangle]
@@ -461,7 +460,7 @@ pub mod skia {
             .as_any()
             .downcast_ref::<VulkanSurface>()
             .expect("vulkan backend not in use");
-        return vulkan_surface.current_raw_offscreen_vulkan_image_handle().as_raw();
+        return vulkan_surface.current_raw_offscreen_vulkan_image_handle();
     }
 
     #[no_mangle]
