@@ -30,6 +30,7 @@ pub struct VulkanSurface {
     image_views: RefCell<Vec<Arc<ImageView<AttachmentImage>>>>,
     instance_handle: ash::vk::Instance,
     frame_index: RefCell<usize>,
+    memory_allocator: RefCell<StandardMemoryAllocator>,
 }
 
 impl VulkanSurface {
@@ -112,19 +113,14 @@ impl VulkanSurface {
         // PoolAllocator would be ideal except I believe it requires compiletime known block sizes
         let memory_allocator = StandardMemoryAllocator::new_default(device.clone());
 
+        Self::recreate_size_dependent_resources(
+            size,
+            &memory_allocator,
+            &mut images,
+            &mut image_views,
+        )?;
+
         for _ in 0..FRAMES_IN_FLIGHT {
-            let image = AttachmentImage::new(
-                &memory_allocator,
-                [size.width, size.height],
-                Format::B8G8R8A8_UNORM,
-            )
-            .map_err(|vke| format!("Failed to create render target image: {vke}"))?;
-
-            let image_view = ImageView::new_default(image.clone())
-                .map_err(|vke| format!("Failed to create image view from image: {vke}"))?;
-
-            images.push(image);
-            image_views.push(image_view);
             fences.push(Arc::new(
                 Fence::from_pool(device.clone())
                     .map_err(|vke| format!("Failed to create fence from device pool: {vke}"))?,
@@ -139,7 +135,31 @@ impl VulkanSurface {
             image_views: RefCell::new(image_views),
             instance_handle,
             frame_index: RefCell::new(0),
+            memory_allocator: RefCell::new(memory_allocator),
         })
+    }
+
+    pub fn recreate_size_dependent_resources(
+        size: PhysicalWindowSize,
+        memory_allocator: &StandardMemoryAllocator,
+        output_images: &mut Vec<Arc<AttachmentImage>>,
+        output_image_views: &mut Vec<Arc<ImageView<AttachmentImage>>>,
+    ) -> Result<(), i_slint_core::platform::PlatformError> {
+        for _ in 0..FRAMES_IN_FLIGHT {
+            let image = AttachmentImage::new(
+                memory_allocator,
+                [size.width, size.height],
+                Format::B8G8R8A8_UNORM,
+            )
+            .map_err(|vke| format!("Failed to create render target image: {vke}"))?;
+
+            let image_view = ImageView::new_default(image.clone())
+                .map_err(|vke| format!("Failed to create image view from image: {vke}"))?;
+
+            output_images.push(image);
+            output_image_views.push(image_view);
+        }
+        Ok(())
     }
 
     pub fn raw_vulkan_instance_handle(&self) -> u64 {
@@ -234,23 +254,17 @@ impl super::Surface for VulkanSurface {
         let resize = self.resize_event.take();
 
         if resize.is_some() {
-            let mut images = self.images.borrow_mut();
+            let mut new_images = Vec::<Arc<AttachmentImage>>::with_capacity(FRAMES_IN_FLIGHT as usize);
+            let mut new_image_views = Vec::<Arc<ImageView<AttachmentImage>>>::with_capacity(FRAMES_IN_FLIGHT as usize);
 
-            // TODO: recreate images here
-            // let new_images = Vec::<Arc<AttachmentImage>>::new();
-            let new_images = self.images.take();
+            VulkanSurface::recreate_size_dependent_resources(
+                resize.unwrap(),
+                &self.memory_allocator.borrow(),
+                &mut new_images,
+                &mut new_image_views,
+            )?;
 
-            *images = new_images;
-
-            let mut new_image_views = Vec::with_capacity(FRAMES_IN_FLIGHT as usize);
-
-            for image in images.clone() {
-                new_image_views.push(
-                    ImageView::new_default(image)
-                        .map_err(|vke| format!("fatal: Error creating image view: {vke}"))?,
-                );
-            }
-
+            *self.images.borrow_mut() = new_images;
             *self.image_views.borrow_mut() = new_image_views;
         }
 
