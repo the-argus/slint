@@ -502,6 +502,12 @@ public:
         return cbindgen_private::slint_skia_renderer_raw_vulkan_instance_handle(inner);
     }
 
+    /// returns a VkImage handle
+    size_t current_offscreen_image() const
+    {
+        return cbindgen_private::slint_skia_renderer_raw_vulkan_current_frame_handle(inner);
+    }
+
     /// Renders the scene into the window provided to the SkiaRenderer's constructor.
     void render() const { cbindgen_private::slint_skia_renderer_render(inner); }
 };
