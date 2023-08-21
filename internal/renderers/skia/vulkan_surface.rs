@@ -14,7 +14,6 @@ use vulkano::image::AttachmentImage;
 use vulkano::image::{ImageAccess, ImageViewAbstract};
 use vulkano::instance::{Instance, InstanceCreateInfo, InstanceExtensions};
 use vulkano::memory::allocator::StandardMemoryAllocator;
-use vulkano::sync::fence::Fence;
 use vulkano::{Handle, VulkanLibrary, VulkanObject};
 
 // must be nonzero
@@ -24,12 +23,11 @@ const FRAMES_IN_FLIGHT: u8 = 3;
 pub struct VulkanSurface {
     resize_event: Cell<Option<PhysicalWindowSize>>,
     gr_context: RefCell<skia_safe::gpu::DirectContext>,
-    fences: RefCell<Vec<Arc<Fence>>>,
     // must be vulkano::format::Format::B8G8R8A8_UNORM
     images: RefCell<Vec<Arc<AttachmentImage>>>,
     image_views: RefCell<Vec<Arc<ImageView<AttachmentImage>>>>,
     instance_handle: ash::vk::Instance,
-    frame_index: RefCell<usize>,
+    frame_index: RefCell<Option<usize>>,
     memory_allocator: RefCell<StandardMemoryAllocator>,
 }
 
@@ -102,9 +100,9 @@ impl VulkanSurface {
         let gr_context = skia_safe::gpu::DirectContext::new_vulkan(&backend_context, None)
             .ok_or_else(|| format!("Error creating Skia Vulkan context"))?;
 
-        let mut images = Vec::<Arc<AttachmentImage>>::new();
-        let mut image_views = Vec::<Arc<ImageView<AttachmentImage>>>::new();
-        let mut fences = Vec::<Arc<Fence>>::new();
+        let mut images = Vec::<Arc<AttachmentImage>>::with_capacity(FRAMES_IN_FLIGHT as usize);
+        let mut image_views =
+            Vec::<Arc<ImageView<AttachmentImage>>>::with_capacity(FRAMES_IN_FLIGHT as usize);
 
         // NOTE: free list allocator, which can potentially lead to external
         // fragmentation. not likely for this usecase, but see
@@ -120,21 +118,13 @@ impl VulkanSurface {
             &mut image_views,
         )?;
 
-        for _ in 0..FRAMES_IN_FLIGHT {
-            fences.push(Arc::new(
-                Fence::from_pool(device.clone())
-                    .map_err(|vke| format!("Failed to create fence from device pool: {vke}"))?,
-            ))
-        }
-
         Ok(Self {
             resize_event: Cell::new(size.into()),
             gr_context: RefCell::new(gr_context),
-            fences: RefCell::new(fences),
             images: RefCell::new(images),
             image_views: RefCell::new(image_views),
             instance_handle,
-            frame_index: RefCell::new(0),
+            frame_index: RefCell::new(None),
             memory_allocator: RefCell::new(memory_allocator),
         })
     }
@@ -175,7 +165,10 @@ impl VulkanSurface {
     }
 
     fn current_vulkan_frame_index(&self) -> usize {
-        self.frame_index.clone().take()
+        match self.frame_index.clone().take() {
+            Some(idx) => idx,
+            None => panic!("Vulkan frame index requested before first render"),
+        }
     }
 }
 
@@ -248,14 +241,18 @@ impl super::Surface for VulkanSurface {
     ) -> Result<(), i_slint_core::platform::PlatformError> {
         let gr_context = &mut self.gr_context.borrow_mut();
 
-        let frame_index = self.current_vulkan_frame_index();
-        let mut fences = self.fences.borrow_mut();
-        let fence = fences.get_mut(frame_index).ok_or_else(|| "Failed to get mut ref to fence at frame index {frame_index} (maximum value exclusive is {FRAMES_IN_FLIGHT})")?;
+        let frame_index = match self.frame_index.clone().take() {
+            Some(idx) => idx,
+            None => 0,
+        };
+
         let resize = self.resize_event.take();
 
         if resize.is_some() {
-            let mut new_images = Vec::<Arc<AttachmentImage>>::with_capacity(FRAMES_IN_FLIGHT as usize);
-            let mut new_image_views = Vec::<Arc<ImageView<AttachmentImage>>>::with_capacity(FRAMES_IN_FLIGHT as usize);
+            let mut new_images =
+                Vec::<Arc<AttachmentImage>>::with_capacity(FRAMES_IN_FLIGHT as usize);
+            let mut new_image_views =
+                Vec::<Arc<ImageView<AttachmentImage>>>::with_capacity(FRAMES_IN_FLIGHT as usize);
 
             VulkanSurface::recreate_size_dependent_resources(
                 resize.unwrap(),
@@ -300,24 +297,6 @@ impl super::Surface for VulkanSurface {
             )
         };
 
-        match fence.wait(std::time::Duration::from_secs(60).into()) {
-            Ok(()) => (),
-            Err(_) => {
-                return Err("Waited on GPU to finish the frame for more than a minute, aborting")?
-            }
-        }
-
-        let mut frame_index = self.frame_index.borrow_mut();
-        *frame_index += 1;
-        *frame_index %= FRAMES_IN_FLIGHT as usize;
-
-        match fence.reset() {
-            Ok(()) => (),
-            Err(vke) => {
-                return Err(format!("Unable to reset fence synchronization resource: {vke}"))?
-            }
-        }
-
         let render_target = &skia_safe::gpu::BackendRenderTarget::new_vulkan(
             (dim.width() as _, dim.height() as _),
             0,
@@ -338,7 +317,14 @@ impl super::Surface for VulkanSurface {
 
         drop(skia_surface);
 
-        gr_context.submit(None);
+        // NOTE: evil. sync cpu, meaning wait until the GPU has finished rendering
+        // to the image. to make this work for real there needs to be a way of
+        // adding a fence signal to the queue submission which is hidden deep
+        // in skia
+        gr_context.submit(true);
+
+        let new_frame_index = (frame_index + 1) % FRAMES_IN_FLIGHT as usize;
+        *self.frame_index.borrow_mut() = Some(new_frame_index);
 
         Ok(())
     }
