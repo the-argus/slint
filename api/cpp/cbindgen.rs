@@ -258,7 +258,6 @@ fn gen_corelib(
     ];
 
     config.export.include = [
-        "Clipboard",
         "ComponentVTable",
         "Slice",
         "WindowAdapterRcOpaque",
@@ -291,6 +290,7 @@ fn gen_corelib(
 
     // included in generated_public.h
     let public_exported_types = [
+        "Clipboard",
         "TimerMode",
         "RenderingState",
         "SetRenderingNotifierError",

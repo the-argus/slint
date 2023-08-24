@@ -140,7 +140,6 @@ public:
 class Platform
 {
 public:
-    using Clipboard = cbindgen_private::Clipboard;
     virtual ~Platform() = default;
     Platform(const Platform &) = delete;
     Platform &operator=(const Platform &) = delete;
@@ -251,12 +250,11 @@ inline void set_platform(std::unique_ptr<Platform> platform)
 #endif
             },
             [](void *p, const SharedString *text, uint8_t clipboard) {
-                reinterpret_cast<Platform *>(p)->set_clipboard_text(*text,
-                                                                    Platform::Clipboard(clipboard));
+                reinterpret_cast<Platform *>(p)->set_clipboard_text(*text, Clipboard(clipboard));
             },
             [](void *p, SharedString *out_text, uint8_t clipboard) -> bool {
-                auto maybe_clipboard = reinterpret_cast<Platform *>(p)->clipboard_text(
-                        Platform::Clipboard(clipboard));
+                auto maybe_clipboard =
+                        reinterpret_cast<Platform *>(p)->clipboard_text(Clipboard(clipboard));
 
                 bool status = maybe_clipboard.has_value();
                 if (status)
