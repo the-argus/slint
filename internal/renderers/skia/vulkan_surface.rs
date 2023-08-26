@@ -27,6 +27,7 @@ pub struct VulkanSurface {
     images: RefCell<Vec<Arc<AttachmentImage>>>,
     image_views: RefCell<Vec<Arc<ImageView<AttachmentImage>>>>,
     instance_handle: ash::vk::Instance,
+    device_handle: ash::vk::PhysicalDevice,
     frame_index: RefCell<Option<usize>>,
     memory_allocator: RefCell<StandardMemoryAllocator>,
 }
@@ -124,6 +125,7 @@ impl VulkanSurface {
             images: RefCell::new(images),
             image_views: RefCell::new(image_views),
             instance_handle,
+            device_handle: physical_device.handle(),
             frame_index: RefCell::new(None),
             memory_allocator: RefCell::new(memory_allocator),
         })
@@ -154,6 +156,10 @@ impl VulkanSurface {
 
     pub fn raw_vulkan_instance_handle(&self) -> u64 {
         return self.instance_handle.as_raw();
+    }
+
+    pub fn raw_vulkan_physical_device_handle(&self) -> u64 {
+        return self.device_handle.as_raw();
     }
 
     pub fn current_raw_offscreen_vulkan_image_handle(&self) -> u64 {

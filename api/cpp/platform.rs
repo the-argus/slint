@@ -451,6 +451,19 @@ pub mod skia {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn slint_skia_renderer_raw_vulkan_physical_device_handle(
+        r: SkiaRendererOpaque,
+    ) -> u64 {
+        let r = &*(r as *const SkiaRenderer);
+        let vulkan_surface = r
+            .surface()
+            .as_any()
+            .downcast_ref::<VulkanSurface>()
+            .expect("vulkan backend not in use");
+        return vulkan_surface.raw_vulkan_physical_device_handle();
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn slint_skia_renderer_raw_vulkan_current_frame_handle(
         r: SkiaRendererOpaque,
     ) -> u64 {

@@ -502,6 +502,11 @@ public:
         return cbindgen_private::slint_skia_renderer_raw_vulkan_instance_handle(inner);
     }
 
+    size_t physical_device_handle() const
+    {
+        return cbindgen_private::slint_skia_renderer_raw_vulkan_physical_device_handle(inner);
+    }
+
     /// returns a VkImage handle
     size_t current_offscreen_image() const
     {
