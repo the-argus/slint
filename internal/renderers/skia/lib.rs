@@ -163,8 +163,8 @@ impl SkiaRenderer {
         Ok(Self::new_with_surface(create_default_surface(window_handle, display_handle, size)?))
     }
 
-    pub fn surface(&self) -> &dyn Surface {
-        return self.surface.borrow().as_ref();
+    pub fn surface(&self) -> Option<&dyn Surface> {
+        Some(self.surface.borrow().as_ref()?.as_ref())
     }
 
     /// Creates a new renderer with the given surface trait implementation.

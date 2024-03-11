@@ -559,6 +559,7 @@ pub mod skia {
         let r = &*(r as *const SkiaRenderer);
         let vulkan_surface = r
             .surface()
+            .unwrap()
             .as_any()
             .downcast_ref::<VulkanSurface>()
             .expect("vulkan backend not in use");
@@ -572,6 +573,7 @@ pub mod skia {
         let r = &*(r as *const SkiaRenderer);
         let vulkan_surface = r
             .surface()
+            .unwrap()
             .as_any()
             .downcast_ref::<VulkanSurface>()
             .expect("vulkan backend not in use");
@@ -585,6 +587,7 @@ pub mod skia {
         let r = &*(r as *const SkiaRenderer);
         let vulkan_surface = r
             .surface()
+            .unwrap()
             .as_any()
             .downcast_ref::<VulkanSurface>()
             .expect("vulkan backend not in use");
