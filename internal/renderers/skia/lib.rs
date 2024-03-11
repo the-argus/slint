@@ -164,7 +164,7 @@ impl SkiaRenderer {
     }
 
     pub fn surface(&self) -> &dyn Surface {
-        return self.surface.as_ref();
+        return self.surface.borrow().as_ref();
     }
 
     /// Creates a new renderer with the given surface trait implementation.
