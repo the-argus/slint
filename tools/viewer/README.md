@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial -->
 # Viewer for Slint
 
 This program is a viewer for `.slint` files from the [Slint Project](https://slint.dev).
@@ -34,6 +35,7 @@ slint-viewer path/to/myfile.slint
    This option is incompatible with `--auto-reload`
  - `--load-data <file>`: Load the values of public properties from a json file.
  - `-I <path>`: Add an include path to look for imported .slint files or images.
+ - `-L <library=path>`: Add a library path to look for `@library` imports.
  - `--style <style>`: Set the style. Defaults to `native` if the Qt backend is compiled, otherwise `fluent`
  - `--backend <backend>`: Override the Slint rendering backend
  - `--on <callback> <handler>`: Set a callback handler, see [callback handler](#callback-handlers)
@@ -50,7 +52,7 @@ callback. These will be shell escaped.
 Example: Imagine we have a myfile.slint looking like this:
 
 ```slint
-MyApp := Window {
+export component MyApp inherits Window {
   callback open-url(string);
   //...
 }

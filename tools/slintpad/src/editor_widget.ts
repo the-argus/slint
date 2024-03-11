@@ -1,12 +1,9 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-// cSpell: ignore edcore lumino inmemory mimetypes printerdemo
-//
-import "monaco-editor/esm/vs/editor/edcore.main.js";
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
+// cSpell: ignore codingame lumino mimetypes printerdemo
 
-import { StandaloneServices, ICodeEditorService } from "vscode/services";
+import * as monaco from "monaco-editor";
 
 import { slint_language } from "./highlighting";
 import {
@@ -22,9 +19,53 @@ import * as github from "./github";
 import { BoxLayout, TabBar, Title, Widget } from "@lumino/widgets";
 import { Message as LuminoMessage } from "@lumino/messaging";
 
-import { MonacoLanguageClient, MonacoServices } from "monaco-languageclient";
+import { MonacoLanguageClient } from "monaco-languageclient";
+import { createConfiguredEditor } from "vscode/monaco";
 
-const hello_world = `import { Button, VerticalBox } from "std-widgets.slint";
+import { initialize as initializeMonacoServices } from "vscode/services";
+import { initialize as initializeVscodeExtensions } from "vscode/extensions";
+import getConfigurationServiceOverride from "@codingame/monaco-vscode-configuration-service-override";
+import getEditorServiceOverride, {
+    IReference,
+    IEditorOptions,
+    IResolvedTextEditorModel,
+} from "@codingame/monaco-vscode-editor-service-override";
+import getLanguagesServiceOverride from "@codingame/monaco-vscode-languages-service-override";
+import getModelServiceOverride from "@codingame/monaco-vscode-model-service-override";
+import getSnippetServiceOverride from "@codingame/monaco-vscode-snippets-service-override";
+import getStorageServiceOverride from "@codingame/monaco-vscode-storage-service-override";
+
+function openEditor(
+    _modelRef: IReference<IResolvedTextEditorModel>,
+    _options: IEditorOptions | undefined,
+    _sideBySide?: boolean,
+): Promise<monaco.editor.IStandaloneCodeEditor | undefined> {
+    // We only have one editor and do not want to open more.
+    return Promise.resolve(undefined);
+}
+
+export function initialize(): Promise<void> {
+    return new Promise((resolve, reject) => {
+        try {
+            initializeMonacoServices({
+                ...getConfigurationServiceOverride(monaco.Uri.file("/tmp")),
+                ...getEditorServiceOverride(openEditor),
+                ...getLanguagesServiceOverride(),
+                ...getModelServiceOverride(),
+                ...getSnippetServiceOverride(),
+                ...getStorageServiceOverride(),
+            }).then(() => {
+                initializeVscodeExtensions().then(() => {
+                    resolve();
+                });
+            });
+        } catch (e) {
+            reject(e);
+        }
+    });
+}
+
+const hello_world = `import { AboutSlint, Button, VerticalBox } from "std-widgets.slint";
 export component Demo {
     VerticalBox {
         alignment: start;
@@ -33,9 +74,8 @@ export component Demo {
             font-size: 24px;
             horizontal-alignment: center;
         }
-        Image {
-            source: @image-url("https://slint.dev/logo/slint-logo-full-light.svg");
-            height: 100px;
+        AboutSlint {
+            preferred-height: 150px;
         }
         HorizontalLayout { alignment: center; Button { text: "OK!"; } }
     }
@@ -45,14 +85,14 @@ export component Demo {
 function internal_file_uri(uuid: string, file_name: string): monaco.Uri {
     console.assert(file_name.startsWith("/"));
     return monaco.Uri.from({
-        scheme: "https",
+        scheme: "user",
         authority: uuid + ".slint.rs",
         path: file_name,
     });
 }
 
 function is_internal_uri(uuid: string, uri: monaco.Uri): boolean {
-    return uri.scheme === "https" && uri.authority === uuid + ".slint.rs";
+    return uri.scheme === "user" && uri.authority === uuid + ".slint.rs";
 }
 
 function file_from_internal_uri(uuid: string, uri: monaco.Uri): string {
@@ -76,13 +116,21 @@ export class KnownUrlMapper implements UrlMapper {
     }
 
     from_internal(uri: monaco.Uri): monaco.Uri | null {
+        if (!is_internal_uri(this.#uuid, uri)) {
+            return uri;
+        }
+
         const file_path = file_from_internal_uri(this.#uuid, uri);
 
         const mapped_url = this.#map[file_path] || null;
-        return (
-            monaco.Uri.parse(mapped_url ?? "file:///missing_url") ??
-            monaco.Uri.parse("file:///broken_url")
-        );
+        if (mapped_url) {
+            return (
+                monaco.Uri.parse(mapped_url) ??
+                monaco.Uri.parse("file:///broken_url")
+            );
+        } else {
+            return uri;
+        }
     }
 }
 
@@ -96,6 +144,10 @@ export class RelativeUrlMapper implements UrlMapper {
     }
 
     from_internal(uri: monaco.Uri): monaco.Uri | null {
+        if (!is_internal_uri(this.#uuid, uri)) {
+            return uri;
+        }
+
         return monaco.Uri.from({
             scheme: this.#base_uri.scheme,
             authority: this.#base_uri.authority,
@@ -104,16 +156,20 @@ export class RelativeUrlMapper implements UrlMapper {
     }
 }
 
-function createModel(
+async function createModel(
     uuid: string,
     source: string,
     uri?: monaco.Uri,
-): monaco.editor.ITextModel {
+): Promise<monaco.editor.ITextModel | null> {
     const url = uri ?? internal_file_uri(uuid, "/main.slint");
     console.assert(is_internal_uri(uuid, url));
 
     const model = monaco.editor.getModel(url);
-    return model ?? monaco.editor.createModel(source, "slint", url);
+    if (model !== null) {
+        return Promise.resolve(model);
+    }
+
+    return monaco.editor.createModel(source, "slint", url);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -139,7 +195,6 @@ function tabTitleFromURL(url: monaco.Uri): string {
 
 class EditorPaneWidget extends Widget {
     auto_compile = true;
-    #style = "fluent-light";
     #main_uri: monaco.Uri | null = null;
     #editor_view_states: Map<
         monaco.Uri,
@@ -147,13 +202,11 @@ class EditorPaneWidget extends Widget {
     >;
     #editor: monaco.editor.IStandaloneCodeEditor | null = null;
     #client: MonacoLanguageClient | null = null;
-    #keystroke_timeout_handle?: number;
     #url_mapper: UrlMapper | null = null;
     #edit_era: number;
     #disposables: monaco.IDisposable[] = [];
     #internal_uuid = self.crypto.randomUUID();
 
-    #service_worker_port: MessagePort;
     #extra_file_urls: { [key: string]: string } = {};
 
     onPositionChangeCallback: PositionChangeCallback = (
@@ -161,13 +214,6 @@ class EditorPaneWidget extends Widget {
     ) => {
         return;
     };
-
-    #onRenderRequest?: (
-        _style: string,
-        _source: string,
-        _url: string,
-        _fetch: (_url: string) => Promise<string>,
-    ) => Promise<monaco.editor.IMarkerData[]>;
 
     #onModelRemoved?: (_url: monaco.Uri) => void;
     #onModelAdded?: (_url: monaco.Uri) => void;
@@ -203,49 +249,43 @@ class EditorPaneWidget extends Widget {
             return this.handle_lsp_url_request(this.#edit_era, url);
         };
 
-        monaco.editor.onDidCreateModel((model) =>
+        monaco.editor.onDidCreateModel((model: monaco.editor.ITextModel) =>
             this.add_model_listener(model),
         );
+    }
 
-        const sw_channel = new MessageChannel();
-        sw_channel.port1.onmessage = (m) => {
-            if (m.data.type === "MapUrl") {
-                const reply_port = m.ports[0];
-                const internal_uri = monaco.Uri.parse(m.data.url);
-                const mapped_url =
-                    this.#url_mapper?.from_internal(internal_uri)?.toString() ??
-                    "";
-                const file = file_from_internal_uri(
-                    this.#internal_uuid,
-                    internal_uri,
-                );
-                this.#extra_file_urls[file] = mapped_url;
-                reply_port.postMessage(mapped_url);
-            } else {
-                console.error(
-                    "Unknown message received from service worker:",
-                    m.data,
-                );
-            }
-        };
-        if (navigator.serviceWorker.controller == null) {
-            console.error("No active service worker!");
-        } else {
-            navigator.serviceWorker.controller.postMessage(
-                { type: "EditorOpened", url_prefix: this.internal_url_prefix },
-                [sw_channel.port2],
+    async map_url(url_: string): Promise<string | undefined> {
+        const js_url = new URL(url_);
+
+        const absolute_uri = monaco.Uri.parse(js_url.toString());
+        const mapped_uri =
+            this.#url_mapper?.from_internal(absolute_uri) ?? absolute_uri;
+        const mapped_string = mapped_uri.toString();
+
+        if (is_internal_uri(this.#internal_uuid, mapped_uri)) {
+            const file = file_from_internal_uri(
+                this.#internal_uuid,
+                mapped_uri,
             );
+            this.#extra_file_urls[file] = mapped_string;
         }
-        this.#service_worker_port = sw_channel.port1;
+
+        return mapped_string;
+    }
+
+    get editor(): monaco.editor.IStandaloneCodeEditor | undefined {
+        if (this.#editor === null) {
+            return undefined;
+        }
+        return this.#editor;
     }
 
     dispose() {
-        this.#service_worker_port.close();
         this.#disposables.forEach((d: monaco.IDisposable) => d.dispose());
         this.#disposables = [];
         this.#editor?.dispose();
         this.#editor = null;
-        super.dispose();
+        this.dispose();
     }
 
     get internal_uuid(): string {
@@ -315,7 +355,7 @@ class EditorPaneWidget extends Widget {
             result.push(main_file);
         }
 
-        monaco.editor.getModels().forEach((m) => {
+        monaco.editor.getModels().forEach((m: monaco.editor.ITextModel) => {
             const u = m?.uri.toString();
 
             if (u != null && u != main_file) {
@@ -335,25 +375,14 @@ class EditorPaneWidget extends Widget {
         return this.#extra_file_urls;
     }
 
-    compile() {
-        this.update_preview();
-    }
-
-    set style(value: string) {
-        this.#style = value;
-        this.update_preview();
-    }
-
-    get style() {
-        return this.#style;
-    }
-
     public clear_models() {
         this.#edit_era += 1;
         this.#url_mapper = null;
         this.#editor_view_states.clear();
         this.#extra_file_urls = {};
-        monaco.editor.getModels().forEach((model) => model.dispose());
+        monaco.editor
+            .getModels()
+            .forEach((model: monaco.editor.ITextModel) => model.dispose());
         this.#onModelsCleared?.();
     }
 
@@ -382,15 +411,15 @@ class EditorPaneWidget extends Widget {
 
     private add_model_listener(model: monaco.editor.ITextModel) {
         const uri = model.uri;
-        model.onDidChangeContent(() => {
-            this.maybe_update_preview_automatically();
-        });
         this.#editor_view_states.set(uri, null);
         this.#onModelAdded?.(uri);
         if (monaco.editor.getModels().length === 1) {
             this.#main_uri = uri;
             this.set_model(uri);
-            this.update_preview();
+            this.language_client?.sendRequest("workspace/executeCommand", {
+                command: "slint/showPreview",
+                arguments: [this.#main_uri?.toString() ?? "", ""],
+            });
         }
     }
 
@@ -404,21 +433,9 @@ class EditorPaneWidget extends Widget {
     }
 
     public set_model(uri: monaco.Uri): boolean {
-        const current_model = this.#editor?.getModel();
-        if (current_model != null) {
-            this.#editor_view_states.set(uri, this.#editor?.saveViewState());
-        }
-
-        const state = this.#editor_view_states.get(uri);
-        if (this.#editor != null) {
-            this.#editor.setModel(monaco.editor.getModel(uri));
-            if (state != null) {
-                this.#editor.restoreViewState(state);
-            }
-            this.#editor.focus();
-            return true;
-        }
-        return false;
+        this.#editor?.setModel(monaco.editor.getModel(uri));
+        this.#editor?.focus();
+        return true;
     }
 
     protected onResize(_msg: LuminoMessage): void {
@@ -427,57 +444,11 @@ class EditorPaneWidget extends Widget {
         }
     }
 
-    protected update_preview() {
-        const model = monaco.editor.getModel(
-            this.#main_uri ?? new monaco.Uri(),
-        );
-        if (model != null) {
-            const source = model.getValue();
-            const era = this.#edit_era;
-
-            setTimeout(() => {
-                if (this.#onRenderRequest != null) {
-                    this.#onRenderRequest(
-                        this.#style,
-                        source,
-                        this.#main_uri?.toString() ?? "",
-                        (url: string) => {
-                            return this.handle_lsp_url_request(era, url);
-                        },
-                    ).then((markers: monaco.editor.IMarkerData[]) => {
-                        if (this.#editor != null) {
-                            const model = this.#editor.getModel();
-                            if (model != null) {
-                                monaco.editor.setModelMarkers(
-                                    model,
-                                    "slint",
-                                    markers,
-                                );
-                            }
-                        }
-                    });
-                }
-            }, 1);
-        }
-    }
-
-    protected maybe_update_preview_automatically() {
-        if (this.auto_compile) {
-            if (this.#keystroke_timeout_handle != null) {
-                clearTimeout(this.#keystroke_timeout_handle);
-            }
-            this.#keystroke_timeout_handle = setTimeout(() => {
-                this.update_preview();
-            }, 500);
-        }
-    }
-
     private setup_editor(
         container: HTMLDivElement,
         lsp: Lsp,
     ): MonacoLanguageClient {
         container.classList.add("edit-area");
-
         monaco.languages.register({
             id: "slint",
             extensions: [".slint"],
@@ -487,41 +458,39 @@ class EditorPaneWidget extends Widget {
         monaco.languages.onLanguage("slint", () => {
             monaco.languages.setMonarchTokensProvider("slint", slint_language);
         });
-        MonacoServices.install();
 
-        const code_editor_service = StandaloneServices.get(ICodeEditorService);
-        this.#disposables.push(
-            code_editor_service.registerCodeEditorOpenHandler(
-                (
-                    { resource, options },
-                    source: monaco.editor.ICodeEditor | null,
-                    _sideBySide?: boolean,
-                ): Promise<monaco.editor.ICodeEditor | null> => {
-                    if (editor == null) {
-                        return Promise.resolve(editor);
-                    }
-
-                    if (!this.set_model(resource)) {
-                        return Promise.resolve(null);
-                    }
-
-                    if (options != null && options.selection != undefined) {
-                        editor.setSelection(options.selection as monaco.IRange);
-                        editor.revealLine(options.selection.startLineNumber);
-                    }
-
-                    return Promise.resolve(source);
-                },
-            ),
-        );
-
-        const editor = monaco.editor.create(container, {
+        const editor = createConfiguredEditor(container, {
             language: "slint",
             glyphMargin: true,
             lightbulb: {
                 enabled: true,
             },
         });
+
+        monaco.editor.registerEditorOpener({
+            openCodeEditor: (
+                _source,
+                resource: monaco.Uri,
+                selectionOrPosition?: monaco.IPosition | monaco.IRange,
+            ) => {
+                editor.setModel(monaco.editor.getModel(resource));
+                if (monaco.Position.isIPosition(selectionOrPosition)) {
+                    const pos = selectionOrPosition as monaco.IPosition;
+                    editor.setSelection({
+                        startLineNumber: pos.lineNumber,
+                        startColumn: pos.column,
+                        endLineNumber: pos.lineNumber,
+                        endColumn: pos.column,
+                    });
+                    editor.revealPosition(pos);
+                } else {
+                    const range = selectionOrPosition as monaco.IRange;
+                    editor.setSelection(range);
+                    editor.revealRange(range);
+                }
+                return true;
+            },
+        } as monaco.editor.ICodeEditorOpener);
 
         const original_set_model = editor.setModel;
         editor.setModel = (model: monaco.editor.ITextModel) => {
@@ -542,6 +511,8 @@ class EditorPaneWidget extends Widget {
 
         this.#editor = editor;
 
+        this.#disposables.push(editor);
+
         this.#disposables.push(
             editor.onDidChangeCursorPosition((_) =>
                 this.onPositionChangeCallback(this.position),
@@ -560,17 +531,6 @@ class EditorPaneWidget extends Widget {
         );
 
         return lsp.language_client;
-    }
-
-    set onRenderRequest(
-        request: (
-            _style: string,
-            _source: string,
-            _url: string,
-            _fetch: (_url: string) => Promise<string>,
-        ) => Promise<monaco.editor.IMarkerData[]>,
-    ) {
-        this.#onRenderRequest = request;
     }
 
     set onModelsCleared(f: () => void) {
@@ -602,12 +562,14 @@ class EditorPaneWidget extends Widget {
             return Promise.resolve("Error: Can not map URL.");
         }
 
-        return this.safely_open_editor_with_url_content(
-            era,
-            uri,
-            internal_uri,
-            false,
-        );
+        return (
+            await this.safely_open_editor_with_url_content(
+                era,
+                uri,
+                internal_uri,
+                false,
+            )
+        )[1];
     }
 
     private async safely_open_editor_with_url_content(
@@ -615,10 +577,10 @@ class EditorPaneWidget extends Widget {
         uri: monaco.Uri,
         internal_uri: monaco.Uri,
         raise_alert: boolean,
-    ): Promise<string> {
+    ): Promise<[monaco.Uri | null, string]> {
         let model = monaco.editor.getModel(internal_uri);
         if (model != null) {
-            return model.getValue();
+            return [model.uri, model.getValue()];
         }
 
         let doc = "";
@@ -635,28 +597,34 @@ class EditorPaneWidget extends Widget {
                             response.statusText,
                     );
                 }
-                return "";
+                return [null, ""];
             }
             doc = await response.text();
         } catch (e) {
             if (raise_alert) {
                 alert("Failed to download data from " + uri + ".");
             }
-            return "";
+            return [null, ""];
         }
 
         model = monaco.editor.getModel(internal_uri);
         if (model != null) {
-            return model.getValue();
+            return [model.uri, model.getValue()];
         }
 
+        let result_uri = null;
         if (era == this.#edit_era) {
-            createModel(this.internal_uuid, doc, internal_uri);
+            model = await createModel(this.internal_uuid, doc, internal_uri);
+            if (model) {
+                result_uri = model.uri;
+            }
         }
-        return doc;
+        return [result_uri, doc];
     }
 
-    async open_tab_from_url(input_url: monaco.Uri): Promise<string> {
+    async open_tab_from_url(
+        input_url: monaco.Uri,
+    ): Promise<[monaco.Uri | null, string]> {
         const [url, file_name, mapper] = await github.open_url(
             this.#internal_uuid,
             input_url.toString(),
@@ -710,6 +678,7 @@ export class EditorWidget extends Widget {
 
     constructor(lsp: Lsp) {
         super({ node: EditorWidget.createNode() });
+
         this.title.label = "Editor";
         this.title.closable = false;
         this.title.caption = `Slint code editor`;
@@ -723,7 +692,7 @@ export class EditorWidget extends Widget {
         this.#editor = new EditorPaneWidget(lsp);
         layout.addWidget(this.#editor);
 
-        this.layout = layout;
+        super.layout = layout;
 
         this.#editor.onModelsCleared = () => {
             this.#tab_bar.clearTabs();
@@ -779,6 +748,10 @@ export class EditorWidget extends Widget {
         }
     }
 
+    async map_url(url: string): Promise<string | undefined> {
+        return this.#editor.map_url(url);
+    }
+
     get current_editor_content(): string {
         return this.#editor.current_editor_content;
     }
@@ -795,34 +768,14 @@ export class EditorWidget extends Widget {
         return this.#editor.current_text_document_version;
     }
 
-    compile() {
-        this.#editor.compile();
-    }
-
-    set auto_compile(value: boolean) {
-        this.#editor.auto_compile = value;
-    }
-
-    get auto_compile() {
-        return this.#editor.auto_compile;
-    }
-
-    set style(value: string) {
-        this.#editor.style = value;
-    }
-
-    get style() {
-        return this.#editor.style;
-    }
-
-    async project_from_url(url: string | null) {
+    async project_from_url(url: string | null): Promise<monaco.Uri | null> {
         if (url == null) {
-            return;
+            return null;
         }
 
         this.#editor.clear_models();
         const uri = monaco.Uri.parse(url);
-        await this.#editor.open_tab_from_url(uri);
+        return (await this.#editor.open_tab_from_url(uri))[0];
     }
 
     known_demos(): [string, string][] {
@@ -850,7 +803,9 @@ export class EditorWidget extends Widget {
     async set_demo(location: string) {
         if (location) {
             const default_tag = "XXXX_DEFAULT_TAG_XXXX";
-            let tag = default_tag.startsWith("XXXX_DEFAULT_TAG_") ? "master" : default_tag;
+            let tag = default_tag.startsWith("XXXX_DEFAULT_TAG_")
+                ? "master"
+                : default_tag;
             {
                 let found;
                 if (
@@ -866,19 +821,8 @@ export class EditorWidget extends Widget {
             );
         } else {
             this.#editor.clear_models();
-            createModel(this.#editor.internal_uuid, hello_world);
+            await createModel(this.#editor.internal_uuid, hello_world);
         }
-    }
-
-    set onRenderRequest(
-        request: (
-            _style: string,
-            _source: string,
-            _url: string,
-            _fetch: (_url: string) => Promise<string>,
-        ) => Promise<monaco.editor.IMarkerData[]>,
-    ) {
-        this.#editor.onRenderRequest = request;
     }
 
     set onPositionChange(cb: PositionChangeCallback) {

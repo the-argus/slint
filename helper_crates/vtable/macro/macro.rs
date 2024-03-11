@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 // cSpell: ignore asyncness constness containee defaultness impls qself supertraits vref
 
@@ -439,8 +439,8 @@ pub fn vtable(_attr: TokenStream, item: TokenStream) -> TokenStream {
                             // Safety: The vtable is valid and inner is a type corresponding to the vtable,
                             // which was allocated such that drop is expected.
                             unsafe {
-                                let ptr = &*ptr;
-                                (ptr.vtable.as_ref().#ident)(VRefMut::from_raw(ptr.vtable, ptr.ptr)) }
+                                let (vtable, ptr) = ((*ptr).vtable, (*ptr).ptr);
+                                (vtable.as_ref().#ident)(VRefMut::from_raw(vtable, ptr)) }
                         }
                         fn new_box<X: HasStaticVTable<#vtable_name>>(value: X) -> VBox<#vtable_name> {
                             // Put the object on the heap and get a pointer to it

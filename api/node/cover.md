@@ -1,11 +1,12 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT -->
 # Slint-node (Beta)
 
 [![npm](https://img.shields.io/npm/v/slint-ui)](https://www.npmjs.com/package/slint-ui)
 
 [Slint](https://slint.dev/) is a UI toolkit that supports different programming languages.
-Slint-node is the integration with node.
+Slint-node is the integration with [Node.js](https://nodejs.org/en) and [Deno](https://deno.com).
 
-To get started you can use the [Walk-through tutorial](https://slint.dev/docs/tutorial/node).
+To get started you use the [walk-through tutorial](https://slint.dev/docs/tutorial/node).
 We also have a [Getting Started Template](https://github.com/slint-ui/slint-nodejs-template) repository with
 the code of a minimal application using Slint that can be used as a starting point to your program.
 
@@ -14,151 +15,288 @@ Slint-node is still in the early stages of development: APIs will change and imp
 
 ## Slint Language Manual
 
-The [Slint language manual](../slint) covers the Slint UI description language
+The [Slint Language Documentation](../slint) covers the Slint UI description language
 in detail.
 
-## Installing Slint
+## Prerequisites
 
-Slint is available via NPM, so you can install by running the following command:
+To use Slint with Node.js, ensure the following programs are installed:
 
-```sh
-npm install slint-ui
-```
-
-### Dependencies
-
-You need to install the following components:
-
-  * **[Node.js](https://nodejs.org/download/release/v16.19.1/)** (v16. Newer versions currently not supported: [#961](https://github.com/slint-ui/slint/issues/961))
+  * **[Node.js](https://nodejs.org/download/release/)** (v16. or newer)
   * **[npm](https://www.npmjs.com/)**
-  * **[Rust compiler](https://www.rust-lang.org/tools/install)** (1.66 or newer)
 
-You will also need a few more dependencies, see <https://github.com/slint-ui/slint/blob/master/docs/building.md#prerequisites>
+To use Slint with Deno, ensure the following programs are installed:
 
-## Using Slint
+  * **[Deno](https://docs.deno.com/runtime/manual)**
 
-To initialize the API, you first need to import the `slint-ui` module in our code:
+### Building from Source
 
-```js
-let slint = require("slint-ui");
+Slint-node comes with pre-built binaries for macOS, Linux, and Windows. If you'd like to use Slint-node on a system
+without pre-built binaries, you need to additional software:
+
+  * **[Rust compiler](https://www.rust-lang.org/tools/install)** (1.70 or newer)
+  * Depending on your operating system, you may need additional components. For a list of required system libraries,
+    see <https://github.com/slint-ui/slint/blob/master/docs/building.md#prerequisites>.
+
+## Getting Started (Node.js)
+
+1. In a new directory, create a new Node.js project by calling [`npm init`](https://docs.npmjs.com/cli/v10/commands/npm-init).
+2. Install Slint for your project using [`npm install slint-ui`](https://docs.npmjs.com/cli/v10/commands/npm-install).
+3. Create a new file called `main.slint` with the following contents:
+
+```
+import { AboutSlint, Button, VerticalBox } from "std-widgets.slint";
+export component Demo {
+    in-out property <string> greeting <=> label.text;
+    VerticalBox {
+        alignment: start;
+        label := Text {
+            text: "Hello World!";
+            font-size: 24px;
+            horizontal-alignment: center;
+        }
+        AboutSlint {
+            preferred-height: 150px;
+        }
+        HorizontalLayout { alignment: center; Button { text: "OK!"; } }
+    }
+}
 ```
 
-This step also installs a hook in NodeJS that allows you to import `.slint` files directly:
+This file declares the user interface.
 
-```js
-let ui = require("../ui/main.slint");
+4. Create a new file called `index.mjs` with the following contents:
+
+```
+import * as slint from "slint-ui";
+let ui = slint.loadFile("main.slint");
+let demo = new ui.Demo();
+
+await demo.run();
 ```
 
-Combining these two steps leads us to the obligatory "Hello World" example:
+This is your main JavaScript entry point:
 
-```js
-require("slint-ui");
-let ui = require("../ui/main.slint");
-let main = new ui.Main();
-main.run();
+* Import the Slint API as an [ECMAScript module](https://nodejs.org/api/esm.html#modules-ecmascript-modules) module. If you prefer you can
+  also import it as [CommonJS](https://nodejs.org/api/modules.html#modules-commonjs-modules) module.
+* Invoke `loadFile()` to compile and load the `.slint` file.
+* Instantiate the `Demo` component declared in `main.slint`.
+* Run it by showing it on the screen and reacting to user input.
+
+5. Run the example with `node index.mjs`
+
+For a complete example, see [/examples/todo/node](https://github.com/slint-ui/slint/tree/master/examples/todo/node).
+
+## Getting Started (Deno)
+
+1. Create a new file called `main.slint` with the following contents:
+
+```
+import { AboutSlint, Button, VerticalBox } from "std-widgets.slint";
+export component Demo {
+    in-out property <string> greeting <=> label.text;
+    VerticalBox {
+        alignment: start;
+        label := Text {
+            text: "Hello World!";
+            font-size: 24px;
+            horizontal-alignment: center;
+        }
+        AboutSlint {
+            preferred-height: 150px;
+        }
+        HorizontalLayout { alignment: center; Button { text: "OK!"; } }
+    }
+}
 ```
 
-See [/examples/todo/node](https://github.com/slint-ui/slint/tree/master/examples/todo/node) for a full example.
+This file declares the user interface.
+
+2. Create a new file called `deno.json` (a [Deno Import Map](https://docs.deno.com/runtime/manual/basics/import_maps))
+   with the following contents:
+
+```json
+{
+  "imports": {
+    "slint-ui": "npm:slint-ui"
+  }
+}
+```
+
+3. Create a new file called `index.ts` with the following contents:
+
+```
+import * as slint from "slint-ui";
+let ui = slint.loadFile("main.slint");
+let demo = new ui.Demo();
+
+await demo.run();
+```
+
+This is your main JavaScript entry point:
+
+* Import the Slint API as an [ECMAScript module](https://nodejs.org/api/esm.html#modules-ecmascript-modules) module through Deno's
+  NPM compatibility layer.
+* Invoke `loadFile()` to compile and load the `.slint` file.
+* Instantiate the `Demo` component declared in `main.slint`.
+* Run it by showing it on the screen and reacting to user input.
+
+1. Run the example with `deno run --allow-read --allow-ffi --allow-sys index.ts`
 
 ## API Overview
 
-### Instantiating a component
+### Instantiating a Component
+
+Use the {@link loadFile} function to load a `.slint` file. Instantiate the [exported component](../slint/src/language/concepts/file)
+with the new operator. Access exported callbacks and properties as JavaScript properties on the instantiated component. In addition,
+the returned object implements the {@link ComponentHandle} interface, to show/hide the instance or access the window.
+
+The following example shows how to instantiating a Slint component from JavaScript.
+
+**`ui/main.slint`**
+
+```
+export component MainWindow inherits Window {
+    callback clicked <=> i-touch-area.clicked;
+
+    in property <int> counter;
+
+    width: 400px;
+    height: 200px;
+
+    i-touch-area := TouchArea {}
+}
+```
 
 The exported component is exposed as a type constructor. The type constructor takes as parameter
 an object which allow to initialize the value of public properties or callbacks.
 
+**`main.mjs`**
+
 ```js
-require("slint-ui");
+import * as slint from "slint-ui";
 // In this example, the main.slint file exports a module which
 // has a counter property and a clicked callback
-let ui = require("ui/main.slint");
+let ui = slint.loadFile("ui/main.slint");
 let component = new ui.MainWindow({
     counter: 42,
     clicked: function() { console.log("hello"); }
 });
 ```
 
-### Accessing a property
+### Accessing a Properties
 
-Properties are exposed as properties on the component instance
+[Properties](../slint/src/language/syntax/properties) declared as `out` or `in-out` in `.slint` files are visible as JavaScript properties on the component instance.
+
+**`main.slint`**
+export component MainWindow {
+    in-out property <string> name;
+    in-out property <int> age: 42;
+}
 
 ```js
-component.counter = 42;
-console.log(component.counter);
+let ui = slint.loadFile("main.slint");
+let instance = new ui.MainWindow();
+console.log(instance.age); // Prints 42
+instance.name = "Joe";
 ```
 
-### Callbacks
+### Setting and Invoking Callbacks
 
-The callbacks are also exposed as property that have a setHandler function, and that can can be called.
+[Callbacks](src/language/syntax/callbacks) declared in `.slint` files are visible as JavaScript function properties on the component instance. Invoke them
+as function to invoke the callback, and assign JavaScript functions to set the callback handler.
+
+**`ui/my-component.slint`**
+
+```
+export component MyComponent inherits Window {
+    callback clicked <=> i-touch-area.clicked;
+
+    width: 400px;
+    height: 200px;
+
+    i-touch-area := TouchArea {}
+}
+```
+
+**`main.mjs`**
 
 ```js
+import * as slint from "slint-ui";
+
+let ui = slint.loadFile("ui/my-component.slint");
+let component = new ui.MyComponent();
+
 // connect to a callback
-component.clicked.setHandler(function() { console.log("hello"); })
+component.clicked = function() { console.log("hello"); };
 // emit a callback
 component.clicked();
 ```
 
 ### Type Mappings
 
+The types used for properties in .slint design markup each translate to specific types in JavaScript. The follow table summarizes the entire mapping:
+
 | `.slint` Type | JavaScript Type | Notes |
 | --- | --- | --- |
 | `int` | `Number` | |
+| `bool` | `Boolean` | |
 | `float` | `Number` | |
 | `string` | `String` | |
-| `color` | `String` | Colors are represented as strings in the form `"#rrggbbaa"`. When setting a color property, any CSS compliant color is accepted as a string. |
+| `color` | {@link RgbaColor} | |
+| `brush` | {@link Brush} | |
+| `image` | {@link ImageData} | |
 | `length` | `Number` | |
 | `physical_length` | `Number` | |
 | `duration` | `Number` | The number of milliseconds |
-| `angle` | `Number` | The value in degrees |
-| structure | `Object` | Structures are mapped to JavaScrip objects with structure fields mapped to properties. |
-| array | `Array` or Model Object | |
+| `angle` | `Number` | The angle in degrees |
+| `relative-font-size` | `Number` | Relative font size factor that is multiplied with the `Window.default-font-size` and can be converted to a `length`. |
+| structure | `Object` | Structures are mapped to JavaScript objects where each structure field is a property. |
+| array | {@link Model} | |
 
-### Models
+### Arrays and Models
 
-For property of array type, they can either be set using an array.
-In that case, getting the property also return an array.
-If the array was set within the .slint file, the array can be obtained
+[Array properties](../slint/src/language/syntax/types#arrays-and-models) can be set from JavaScript by passing
+either `Array` objects or implementations of the {@link Model} interface.
+
+When passing a JavaScript `Array` object, the contents of the array are copied. Any changes to the JavaScript afterwards will not be visible on the Slint side. 
+
+Reading a Slint array property from JavaScript will always return a @{link Model}.
 
 ```js
 component.model = [1, 2, 3];
-// component.model.push(4); // does not work, because it operate on a copy
-// but re-assigning works
+// component.model.push(4); // does not work, because assignment creates a copy.
+// Use re-assignment instead.
 component.model = component.model.concat(4);
 ```
 
-Another option is to set a model object.  A model object has the following function:
+Another option is to set an object that implements the {@link Model} interface.
 
-* `rowCount()`: returns the number of element in the model.
-* `rowData(index)`: return the row at the given index
-* `setRowData(index, data)`: called when the model need to be changed. `this.notify.rowDataChanged` must be called if successful.
+### Globals
 
-When such an object is set to a model property, it gets a new `notify` object with the following function
+You can declare [globally available singletons](../slint/src/language/syntax/globals) in your
+`.slint` files. If exported, these singletons are accessible as properties on your main
+componen instance. Each global singleton is represented by an object with properties and callbacks,
+similar to API that's created for your `.slint` component.
 
-* `rowDataChanged(index)`: notify the view that the row was changed.
-* `rowAdded(index, count)`: notify the view that rows were added.
-* `rowRemoved(index, count)`: notify the view that a row were removed.
-* `reset()`: notify the view that everything may have changed.
+For example the following `.slint` markup defines a global `Logic` singleton that's also exported:
 
-As an example, here is the implementation of the `ArrayModel` (which is available as `slint.ArrayModel`)
+```
+export global Logic {
+    callback to_uppercase(string) -> string;
+}
+```
+
+Assuming this global is used together with the `MyComponent` from the
+previous section, you can access `Logic` like this:
 
 ```js
-let array = [1, 2, 3];
-let model = {
-    rowCount() { return a.length; },
-    rowData(row) { return a[row]; },
-    setRowData(row, data) { a[row] = data; this.notify.rowDataChanged(row); },
-    push() {
-        let size = a.length;
-        Array.prototype.push.apply(a, arguments);
-        this.notify.rowAdded(size, arguments.length);
-    },
-    remove(index, size) {
-        let r = a.splice(index, size);
-        this.notify.rowRemoved(size, arguments.length);
-    },
+import * as slint from "slint-ui";
+
+let ui = slint.loadFile("ui/my-component.slint");
+let component = new ui.MyComponent();
+
+component.Logic.to_upper_case = (str) => {
+    return str.toUpperCase();
 };
-component.model = model;
-model.push(4); // this works
-// does NOT work, getting the model does not return the right object
-// component.model.push(5);
 ```

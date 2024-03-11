@@ -98,7 +98,20 @@ fn lower_element_layout(
         return;
     };
     match base_type.name.as_str() {
-        "Row" => panic!("Error caught at element lookup time"),
+        "Row" => {
+            // We shouldn't lower layout if we have a Row in there. Unless the Row is the root of a repeated item,
+            // in which case another error has been reported
+            assert!(
+                diag.has_error()
+                    && Rc::ptr_eq(&component.root_element, elem)
+                    && component
+                        .parent_element
+                        .upgrade()
+                        .map_or(false, |e| e.borrow().repeated.is_some()),
+                "Error should have been caught at element lookup time"
+            );
+            return;
+        }
         "GridLayout" => lower_grid_layout(component, elem, diag),
         "HorizontalLayout" => lower_box_layout(elem, diag, Orientation::Horizontal),
         "VerticalLayout" => lower_box_layout(elem, diag, Orientation::Vertical),
@@ -226,13 +239,16 @@ fn lower_grid_layout(
     layout_info_prop_v.element().borrow_mut().bindings.insert(
         layout_info_prop_v.name().into(),
         BindingExpression::new_with_span(
-            Expression::ComputeLayoutInfo(Layout::GridLayout(grid), Orientation::Vertical),
+            Expression::ComputeLayoutInfo(Layout::GridLayout(grid.clone()), Orientation::Vertical),
             span,
         )
         .into(),
     );
     grid_layout_element.borrow_mut().layout_info_prop =
         Some((layout_info_prop_h, layout_info_prop_v));
+    for d in grid_layout_element.borrow_mut().debug.iter_mut() {
+        d.1 = Some(Layout::GridLayout(grid.clone()));
+    }
 }
 
 impl GridLayout {
@@ -414,12 +430,15 @@ fn lower_box_layout(
     layout_info_prop_v.element().borrow_mut().bindings.insert(
         layout_info_prop_v.name().into(),
         BindingExpression::new_with_span(
-            Expression::ComputeLayoutInfo(Layout::BoxLayout(layout), Orientation::Vertical),
+            Expression::ComputeLayoutInfo(Layout::BoxLayout(layout.clone()), Orientation::Vertical),
             span,
         )
         .into(),
     );
     layout_element.borrow_mut().layout_info_prop = Some((layout_info_prop_h, layout_info_prop_v));
+    for d in layout_element.borrow_mut().debug.iter_mut() {
+        d.1 = Some(Layout::BoxLayout(layout.clone()));
+    }
 }
 
 fn lower_dialog_layout(
@@ -437,7 +456,14 @@ fn lower_dialog_layout(
         grid.geometry.padding.top.get_or_insert(NamedReference::new(metrics, "layout-padding"));
         grid.geometry.padding.left.get_or_insert(NamedReference::new(metrics, "layout-padding"));
         grid.geometry.padding.right.get_or_insert(NamedReference::new(metrics, "layout-padding"));
-        grid.geometry.spacing.get_or_insert(NamedReference::new(metrics, "layout-spacing"));
+        grid.geometry
+            .spacing
+            .horizontal
+            .get_or_insert(NamedReference::new(metrics, "layout-spacing"));
+        grid.geometry
+            .spacing
+            .vertical
+            .get_or_insert(NamedReference::new(metrics, "layout-spacing"));
     }
 
     let layout_cache_prop_h = create_new_prop(dialog_element, "layout-cache-h", Type::LayoutCache);
@@ -617,12 +643,15 @@ fn lower_dialog_layout(
     layout_info_prop_v.element().borrow_mut().bindings.insert(
         layout_info_prop_v.name().into(),
         BindingExpression::new_with_span(
-            Expression::ComputeLayoutInfo(Layout::GridLayout(grid), Orientation::Vertical),
+            Expression::ComputeLayoutInfo(Layout::GridLayout(grid.clone()), Orientation::Vertical),
             span,
         )
         .into(),
     );
     dialog_element.borrow_mut().layout_info_prop = Some((layout_info_prop_h, layout_info_prop_v));
+    for d in dialog_element.borrow_mut().debug.iter_mut() {
+        d.1 = Some(Layout::GridLayout(grid.clone()));
+    }
 }
 
 struct CreateLayoutItemResult {
@@ -746,4 +775,48 @@ fn check_no_layout_properties(item: &ElementRc, diag: &mut BuildDiagnostics) {
             diag.push_error(format!("{} used outside of a Dialog", prop), &*expr.borrow());
         }
     }
+}
+
+/// For fixed layout, we need to dissociate the width and the height property of the WindowItem from width and height property
+/// in slint such that the width and height property are actually constants.
+///
+/// The Slint runtime will change the width and height property of the native WindowItem to match those of the actual
+/// window, but we don't want that to happen if we have a fixed layout.
+pub fn check_window_layout(component: &Rc<Component>) {
+    if component.root_constraints.borrow().fixed_height {
+        adjust_window_layout(component, "height");
+    }
+    if component.root_constraints.borrow().fixed_width {
+        adjust_window_layout(component, "width");
+    }
+}
+
+fn adjust_window_layout(component: &Rc<Component>, prop: &str) {
+    let new_prop = crate::layout::create_new_prop(
+        &component.root_element,
+        &format!("fixed-{prop}"),
+        Type::LogicalLength,
+    );
+    {
+        let mut root = component.root_element.borrow_mut();
+        if let Some(b) = root.bindings.remove(prop) {
+            root.bindings.insert(new_prop.name().to_string(), b);
+        };
+        let mut analysis = root.property_analysis.borrow_mut();
+        if let Some(a) = analysis.remove(prop) {
+            analysis.insert(new_prop.name().to_string(), a);
+        };
+        drop(analysis);
+        root.bindings.insert(
+            prop.to_string(),
+            RefCell::new(Expression::PropertyReference(new_prop.clone()).into()),
+        );
+    }
+
+    let old_prop = NamedReference::new(&component.root_element, prop);
+    crate::object_tree::visit_all_named_references(component, &mut |nr| {
+        if nr == &old_prop {
+            *nr = new_prop.clone()
+        }
+    });
 }

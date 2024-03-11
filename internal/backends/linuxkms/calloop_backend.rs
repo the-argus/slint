@@ -2,14 +2,19 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 use std::cell::RefCell;
-use std::os::fd::{AsFd, BorrowedFd, RawFd};
+#[cfg(not(feature = "libseat"))]
+use std::fs::OpenOptions;
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};
+#[cfg(feature = "libseat")]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(not(feature = "libseat"))]
+use std::os::unix::fs::OpenOptionsExt;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use calloop::EventLoop;
 use i_slint_core::platform::PlatformError;
-use i_slint_core::platform::WindowAdapter;
 
 use crate::fullscreenwindowadapter::FullscreenWindowAdapter;
 
@@ -63,6 +68,7 @@ impl i_slint_core::platform::EventLoopProxy for Proxy {
 }
 
 pub struct Backend {
+    #[cfg(feature = "libseat")]
     seat: Rc<RefCell<libseat::Seat>>,
     window: RefCell<Option<Rc<FullscreenWindowAdapter>>>,
     user_event_receiver: RefCell<Option<calloop::channel::Channel<Box<dyn FnOnce() + Send>>>>,
@@ -71,7 +77,7 @@ pub struct Backend {
         &'a crate::DeviceOpener,
     ) -> Result<
         Box<dyn crate::fullscreenwindowadapter::FullscreenRenderer>,
-        i_slint_core::platform::PlatformError,
+        PlatformError,
     >,
     sel_clipboard: RefCell<Option<String>>,
     clipboard: RefCell<Option<String>>,
@@ -89,6 +95,8 @@ impl Backend {
             Some("skia-vulkan") => crate::renderer::skia::SkiaRendererAdapter::new_vulkan,
             #[cfg(feature = "renderer-skia-opengl")]
             Some("skia-opengl") => crate::renderer::skia::SkiaRendererAdapter::new_opengl,
+            #[cfg(any(feature = "renderer-skia-opengl", feature = "renderer-skia-vulkan"))]
+            Some("skia-software") => crate::renderer::skia::SkiaRendererAdapter::new_software,
             #[cfg(feature = "renderer-femtovg")]
             Some("femtovg") => crate::renderer::femtovg::FemtoVGRendererAdapter::new,
             None => crate::renderer::try_skia_then_femtovg,
@@ -101,26 +109,26 @@ impl Backend {
             }
         };
 
+        #[cfg(feature = "libseat")]
         let seat_active = Rc::new(RefCell::new(false));
 
         //libseat::set_log_level(libseat::LogLevel::Debug);
 
+        #[cfg(feature = "libseat")]
         let mut seat = {
             let seat_active = seat_active.clone();
-            libseat::Seat::open(
-                move |_seat, event| match event {
-                    libseat::SeatEvent::Enable => {
-                        *seat_active.borrow_mut() = true;
-                    }
-                    libseat::SeatEvent::Disable => {
-                        unimplemented!("Seat deactivation is not implemented");
-                    }
-                },
-                None,
-            )
+            libseat::Seat::open(move |_seat, event| match event {
+                libseat::SeatEvent::Enable => {
+                    *seat_active.borrow_mut() = true;
+                }
+                libseat::SeatEvent::Disable => {
+                    unimplemented!("Seat deactivation is not implemented");
+                }
+            })
             .map_err(|e| format!("Error opening session with libseat: {e}"))?
         };
 
+        #[cfg(feature = "libseat")]
         while !(*seat_active.borrow()) {
             if seat.dispatch(5000).map_err(|e| format!("Error waiting for seat activation: {e}"))?
                 == 0
@@ -130,6 +138,7 @@ impl Backend {
         }
 
         Ok(Backend {
+            #[cfg(feature = "libseat")]
             seat: Rc::new(RefCell::new(seat)),
             window: Default::default(),
             user_event_receiver: RefCell::new(Some(user_event_receiver)),
@@ -144,31 +153,52 @@ impl Backend {
 impl i_slint_core::platform::Platform for Backend {
     fn create_window_adapter(
         &self,
-    ) -> Result<
-        std::rc::Rc<dyn i_slint_core::window::WindowAdapter>,
-        i_slint_core::platform::PlatformError,
-    > {
-        let renderer = (self.renderer_factory)(&|device: &std::path::Path| {
-            let (_, fd) = self
+    ) -> Result<std::rc::Rc<dyn i_slint_core::window::WindowAdapter>, PlatformError> {
+        #[cfg(feature = "libseat")]
+        let device_accessor = |device: &std::path::Path| -> Result<Rc<OwnedFd>, PlatformError> {
+            let device = self
                 .seat
                 .borrow_mut()
                 .open_device(&device)
                 .map_err(|e| format!("Error opening device: {e}"))?;
 
             // For polling for drm::control::Event::PageFlip we need a blocking FD. Would be better to do this non-blocking
+            let fd = device.as_fd().as_raw_fd();
             let flags = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFL)
                 .map_err(|e| format!("Error getting file descriptor flags: {e}"))?;
-            // Safetly: We only remove a bit, don't care about the others
-            let mut flags = unsafe { nix::fcntl::OFlag::from_bits_unchecked(flags) };
+            let mut flags = nix::fcntl::OFlag::from_bits_retain(flags);
             flags.remove(nix::fcntl::OFlag::O_NONBLOCK);
             nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_SETFL(flags))
                 .map_err(|e| format!("Error making device fd non-blocking: {e}"))?;
 
             // Safety: We take ownership of the now shared FD, ... although we should be using libseat's close_device....
-            use std::os::fd::FromRawFd;
-            Ok(Arc::new(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }))
-        })?;
-        let adapter = FullscreenWindowAdapter::new(renderer)?;
+            Ok(Rc::new(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }))
+        };
+
+        #[cfg(not(feature = "libseat"))]
+        let device_accessor = |device: &std::path::Path| -> Result<Rc<OwnedFd>, PlatformError> {
+            let device = OpenOptions::new()
+                .custom_flags((nix::fcntl::OFlag::O_NOCTTY | nix::fcntl::OFlag::O_CLOEXEC).bits())
+                .read(true)
+                .write(true)
+                .open(device)
+                .map(|file| file.into())
+                .map_err(|e| format!("Error opening device: {e}"))?;
+
+            Ok(Rc::new(device))
+        };
+
+        // This could be per-screen, once we support multiple outputs
+        let rotation =
+            std::env::var("SLINT_KMS_ROTATION").map_or(Ok(Default::default()), |rot_str| {
+                rot_str
+                    .as_str()
+                    .try_into()
+                    .map_err(|e| format!("Failed to parse SLINT_KMS_ROTATION: {e}"))
+            })?;
+
+        let renderer = (self.renderer_factory)(&device_accessor)?;
+        let adapter = FullscreenWindowAdapter::new(renderer, rotation)?;
 
         *self.window.borrow_mut() = Some(adapter.clone());
 
@@ -176,8 +206,6 @@ impl i_slint_core::platform::Platform for Backend {
     }
 
     fn run_event_loop(&self) -> Result<(), PlatformError> {
-        let adapter = self.window.borrow().as_ref().unwrap().clone();
-
         let mut event_loop: EventLoop<LoopData> =
             EventLoop::try_new().map_err(|e| format!("Error creating event loop: {}", e))?;
 
@@ -186,8 +214,12 @@ impl i_slint_core::platform::Platform for Backend {
         *self.proxy.loop_signal.lock().unwrap() = Some(loop_signal.clone());
         let quit_loop = self.proxy.quit_loop.clone();
 
-        let mouse_position_property =
-            input::LibInputHandler::init(adapter.window(), &event_loop.handle(), &self.seat)?;
+        let mouse_position_property = input::LibInputHandler::init(
+            &self.window,
+            &event_loop.handle(),
+            #[cfg(feature = "libseat")]
+            &self.seat,
+        )?;
 
         let Some(user_event_receiver) = self.user_event_receiver.borrow_mut().take() else {
             return Err(
@@ -195,11 +227,17 @@ impl i_slint_core::platform::Platform for Backend {
             );
         };
 
+        let callbacks_to_invoke_per_iteration = Rc::new(RefCell::new(Vec::new()));
+
         event_loop
             .handle()
-            .insert_source(user_event_receiver, |event, _, _| {
-                let calloop::channel::Event::Msg(callback) = event else { return };
-                callback();
+            .insert_source(user_event_receiver, {
+                let callbacks_to_invoke_per_iteration = callbacks_to_invoke_per_iteration.clone();
+                move |event, _, _| {
+                    let calloop::channel::Event::Msg(callback) = event else { return };
+                    // Remember the callbacks and invoke them after updating the animation tick
+                    callbacks_to_invoke_per_iteration.borrow_mut().push(callback);
+                }
             })
             .map_err(
                 |e: calloop::InsertError<calloop::channel::Channel<Box<dyn FnOnce() + Send>>>| {
@@ -214,14 +252,18 @@ impl i_slint_core::platform::Platform for Backend {
         while !quit_loop.load(std::sync::atomic::Ordering::Acquire) {
             i_slint_core::platform::update_timers_and_animations();
 
-            adapter.render_if_needed(mouse_position_property.as_ref())?;
+            // Only after updating the animation tick, invoke callbacks from invoke_from_event_loop(). They
+            // might set animated properties, which requires an up-to-date start time.
+            for callback in callbacks_to_invoke_per_iteration.take().into_iter() {
+                callback();
+            }
 
-            let next_timeout = if adapter.window().has_active_animations() {
-                Some(std::time::Duration::from_millis(16))
-            } else {
-                i_slint_core::platform::duration_until_next_timer_update()
+            if let Some(adapter) = self.window.borrow().as_ref() {
+                adapter.register_event_loop(event_loop.handle())?;
+                adapter.clone().render_if_needed(mouse_position_property.as_ref())?;
             };
 
+            let next_timeout = i_slint_core::platform::duration_until_next_timer_update();
             event_loop
                 .dispatch(next_timeout, &mut loop_data)
                 .map_err(|e| format!("Error dispatch events: {e}"))?;
@@ -257,7 +299,7 @@ impl i_slint_core::platform::Platform for Backend {
 }
 
 #[derive(Default)]
-struct LoopData {}
+pub struct LoopData {}
 
 struct Device {
     // in the future, use this from libseat: device_id: i32,
@@ -269,3 +311,5 @@ impl AsFd for Device {
         unsafe { BorrowedFd::borrow_raw(self.fd) }
     }
 }
+
+pub type EventLoopHandle<'a> = calloop::LoopHandle<'a, LoopData>;

@@ -3,15 +3,15 @@
 
 [package]
 name = "i-slint-compiler"
-version = "1.2.0"
-authors = ["Slint Developers <info@slint.dev>"]
-edition = "2021"
-build = "build.rs"
-license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial"
 description = "Internal Slint Compiler Library"
-repository = "https://github.com/slint-ui/slint"
-homepage = "https://slint.dev"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
+version.workspace = true
+build = "build.rs"
 
 [lib]
 path = "lib.rs"
@@ -30,11 +30,13 @@ display-diagnostics = ["codemap", "codemap-diagnostic"]
 # Enabled the support to render images and font in the binary
 software-renderer = ["image", "dep:resvg", "fontdue", "i-slint-common/shared-fontdb"]
 
-[dependencies]
-i-slint-common = { version = "=1.2.0", path = "../common" }
+default = []
 
-num_enum = "0.6.1"
-strum = { version = "0.25.0", default-features = false, features = ["derive"] }
+[dependencies]
+i-slint-common = { workspace = true, features = ["default"] }
+
+num_enum = "0.7"
+strum = { workspace = true }
 rowan = "0.15.5"
 smol_str = "0.2.0"
 derive_more = "0.99.5"
@@ -46,18 +48,17 @@ lyon_path = { version = "1.0" }
 lyon_extra = "1.0.1"
 thiserror = "1"
 by_address = "1.0.4"
-css-color-parser2 = "1.0.1"
-itertools = "0.11"
+css-color-parser2 = { workspace = true }
+itertools = { workspace = true }
 once_cell = "1"
 url = "2.2.1"
-dunce = "1.0.1"
 linked_hash_set = "0.1.4"
 
 # for processing and embedding the rendered image (texture)
 image = { version = "0.24", optional = true }
 resvg = { workspace = true, optional = true }
 # font embedding
-fontdue = { version = "0.7.1", optional = true }
+fontdue = { workspace = true, optional = true }
 
 [dev-dependencies]
 i-slint-parser-test-macro = { path = "./parser-test-macro" }

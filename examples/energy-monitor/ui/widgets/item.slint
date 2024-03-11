@@ -7,10 +7,10 @@ import { Theme } from "../theme.slint";
 import { StateLayer } from "../components/state_layer.slint";
 
 export component Item {
-    callback clicked <=> i-touch-area.clicked;
-
     in property <string> text <=> i-text.text;
     in property <bool> has-separator;
+
+    callback clicked <=> i-touch-area.clicked;
 
     min-height: 40px;
 
@@ -31,15 +31,15 @@ export component Item {
         i-text := Text {
             horizontal-stretch: 1;
             color: Theme.palette.white;
-            font-size: Theme.typo.desciption.size;
-            font-weight: Theme.typo.desciption.weight;
+            font-size: Theme.typo.description.size;
+            font-weight: Theme.typo.description.weight;
             vertical-alignment: center;
         }
 
         @children
     }
 
-    if(has-separator) : Rectangle {
+    if (has-separator) : Rectangle {
         width: parent.width - 2 * Theme.spaces.medium;
         height: 1px;
         x: Theme.spaces.medium;

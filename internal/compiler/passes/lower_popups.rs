@@ -16,7 +16,7 @@ pub fn lower_popups(
     type_register: &TypeRegister,
     diag: &mut BuildDiagnostics,
 ) {
-    let window_type = type_register.lookup_element("Window").unwrap();
+    let window_type = type_register.lookup_builtin_element("Window").unwrap();
 
     recurse_elem_including_sub_components_no_borrow(
         component,
@@ -135,10 +135,10 @@ fn create_coordinate(
 ) -> NamedReference {
     let expression = popup_comp
         .root_element
-        .borrow()
+        .borrow_mut()
         .bindings
-        .get(coord)
-        .map(|e| e.borrow().expression.clone())
+        .remove(coord)
+        .map(|e| e.into_inner().expression)
         .unwrap_or(Expression::NumberLiteral(0., crate::expression_tree::Unit::Phx));
     let property_name = format!("{}-popup-{}", popup_comp.root_element.borrow().id, coord);
     parent_element

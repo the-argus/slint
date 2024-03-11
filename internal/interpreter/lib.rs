@@ -74,13 +74,13 @@ compile_error!(
 );
 
 mod api;
-mod dynamic_component;
+mod dynamic_item_tree;
 mod dynamic_type;
 mod eval;
 mod eval_layout;
 mod global_component;
 #[cfg(feature = "highlight")]
-mod highlight;
+pub mod highlight;
 mod value_model;
 
 #[doc(inline)]

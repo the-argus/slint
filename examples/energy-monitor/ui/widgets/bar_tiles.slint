@@ -24,8 +24,8 @@ component ValueLabel {
             vertical-stretch: 0;
             horizontal-alignment: right;
             text: root.text;
-            font-size: Theme.typo.desciption-light.size;
-            font-weight: Theme.typo.desciption-light.weight;
+            font-size: Theme.typo.description-light.size;
+            font-weight: Theme.typo.description-light.weight;
         }
 
         Text {
@@ -33,20 +33,20 @@ component ValueLabel {
             vertical-stretch: 0;
             horizontal-alignment: left;
             text: "°";
-            font-size: Theme.typo.desciption-light.size;
-            font-weight: Theme.typo.desciption-light.weight;
+            font-size: Theme.typo.description-light.size;
+            font-weight: Theme.typo.description-light.weight;
         }
     }
 }
 
 component BarTile {
-    in property <string> title <=> i-tiitle.text;
+    in property <string> title <=> i-title.text;
     in property <image> icon <=> i-icon.source;
-    in property <int> max;
-    in property <int> min;
+    in property <float> max;
+    in property <float> min;
     in property <string> unit;
-    in property <int> absolute-min;
-    in property <int> absolute-max;
+    in property <float> absolute-min;
+    in property <float> absolute-max;
 
     HorizontalLayout {
         alignment: center;
@@ -54,12 +54,12 @@ component BarTile {
         VerticalLayout {
             spacing: 7px;
 
-            i-tiitle := Text {
+            i-title := Text {
                 color: Theme.palette.white;
                 vertical-stretch: 0;
                 horizontal-alignment: center;
-                font-size: Theme.typo.desciption.size;
-                font-weight: Theme.typo.desciption.weight;
+                font-size: Theme.typo.description.size;
+                font-weight: Theme.typo.description.weight;
             }
 
             i-icon := Image {
@@ -68,7 +68,7 @@ component BarTile {
             }
 
             ValueLabel {
-                text: max;
+                text: floor(max);
                 unit: unit;
             }
 
@@ -88,13 +88,13 @@ component BarTile {
                         min_width: 12px;
                         border-radius: 6px;
 
-                        background: Theme.palette.limon-green-light-gradient;
+                        background: Theme.palette.lemon-green-light-gradient;
                     }
                 }
             }
 
             ValueLabel {
-                text: min;
+                text: floor(min);
                 unit: unit;
             }
         }
@@ -132,7 +132,7 @@ export component BarTiles {
                     max: display-max;
 
                     in {
-                        animate max { duration: Theme.durations.slow; easing: ease-in-out; }
+                        animate max { duration: Theme.durations.slow; easing: cubic-bezier(0, 0, 0, 1); }
                     }
                 }
             ]

@@ -3,6 +3,7 @@
 
 //! Inline each object_tree::Component within the main Component
 
+use crate::diagnostics::Spanned;
 use crate::expression_tree::{BindingExpression, Expression, NamedReference};
 use crate::langtype::{ElementType, Type};
 use crate::object_tree::*;
@@ -100,9 +101,9 @@ fn inline_element(
     let mut mapping = HashMap::new();
     mapping.insert(element_key(inlined_component.root_element.clone()), elem.clone());
 
-    let mut new_children = vec![];
-    new_children
-        .reserve(elem_mut.children.len() + inlined_component.root_element.borrow().children.len());
+    let mut new_children = Vec::with_capacity(
+        elem_mut.children.len() + inlined_component.root_element.borrow().children.len(),
+    );
     new_children.extend(
         inlined_component.root_element.borrow().children.iter().map(|x| {
             duplicate_element_with_mapping(x, &mut mapping, root_component, priority_delta)
@@ -129,6 +130,7 @@ fn inline_element(
     }
 
     elem_mut.children = new_children;
+    elem_mut.debug.extend_from_slice(&inlined_component.root_element.borrow().debug);
 
     if let ElementType::Component(c) = &mut elem_mut.base_type {
         if c.parent_element.upgrade().is_some() {
@@ -149,7 +151,20 @@ fn inline_element(
             .iter()
             .map(|p| duplicate_popup(p, &mut mapping, priority_delta)),
     );
-    for (k, val) in inlined_component.root_element.borrow().bindings.iter() {
+
+    // When inlining a component before the collect_init_code phase, do the collect_init_code phase for
+    // the init callback in the inlined component manually, by cloning the expression into the init_code
+    // and skipping "init" in the binding merge phase.
+    let maybe_init_callback_to_inline = inlined_component
+        .root_element
+        .borrow()
+        .bindings
+        .get("init")
+        .map(|binding| binding.borrow().expression.clone());
+
+    for (k, val) in
+        inlined_component.root_element.borrow().bindings.iter().filter(|(k, _)| *k != "init")
+    {
         match elem_mut.bindings.entry(k.clone()) {
             std::collections::btree_map::Entry::Vacant(entry) => {
                 let priority = &mut entry.insert(val.clone()).get_mut().priority;
@@ -174,23 +189,36 @@ fn inline_element(
 
     core::mem::drop(elem_mut);
 
+    let fixup_init_expression = |mut init_code: Expression| {
+        // Fix up any property references from within already collected init code.
+        visit_named_references_in_expression(&mut init_code, &mut |nr| {
+            fixup_reference(nr, &mapping)
+        });
+        fixup_element_references(&mut init_code, &mapping);
+        init_code
+    };
+
+    root_component
+        .init_code
+        .borrow_mut()
+        .constructor_code
+        .extend(maybe_init_callback_to_inline.map(fixup_init_expression));
+
     let inlined_init_code = inlined_component
         .init_code
         .borrow()
         .inlined_init_code
         .values()
         .cloned()
-        .chain(inlined_component.init_code.borrow().constructor_code.iter().map(
-            |constructor_code_expr| {
-                // Fix up any property references from within already collected init code.
-                let mut new_constructor_code = constructor_code_expr.clone();
-                visit_named_references_in_expression(&mut new_constructor_code, &mut |nr| {
-                    fixup_reference(nr, &mapping)
-                });
-                fixup_element_references(&mut new_constructor_code, &mapping);
-                new_constructor_code
-            },
-        ))
+        .chain(
+            inlined_component
+                .init_code
+                .borrow()
+                .constructor_code
+                .iter()
+                .cloned()
+                .map(fixup_init_expression),
+        )
         .collect();
 
     root_component
@@ -236,7 +264,7 @@ fn duplicate_element_with_mapping(
             .collect(),
         repeated: elem.repeated.clone(),
         is_component_placeholder: elem.is_component_placeholder,
-        node: elem.node.clone(),
+        debug: elem.debug.clone(),
         enclosing_component: Rc::downgrade(root_component),
         states: elem.states.clone(),
         transitions: elem
@@ -248,6 +276,7 @@ fn duplicate_element_with_mapping(
         layout_info_prop: elem.layout_info_prop.clone(),
         default_fill_parent: elem.default_fill_parent,
         accessibility_props: elem.accessibility_props.clone(),
+        geometry_props: elem.geometry_props.clone(),
         named_references: Default::default(),
         item_index: Default::default(), // Not determined yet
         item_index_of_first_children: Default::default(),
@@ -482,15 +511,8 @@ fn component_requires_inlining(component: &Rc<Component>) -> bool {
 
     let root_element = &component.root_element;
     if super::flickable::is_flickable_element(root_element)
-        || super::focus_item::get_explicit_forward_focus(root_element).is_some()
         || super::lower_layout::is_layout_element(root_element)
     {
-        return true;
-    }
-
-    // the focus_item pass needs to refer to elements that are focusable, if it is not inline
-    // it is not possible to refer to them in an  Expression::ElementReference
-    if matches!(&root_element.borrow().base_type, ElementType::Builtin(b) if b.accepts_focus) {
         return true;
     }
 
@@ -510,9 +532,18 @@ fn component_requires_inlining(component: &Rc<Component>) -> bool {
             return true;
         }
         if binding.animation.is_some() {
-            // If there is an animation, we currently inline so that if this property
-            // is set with a binding, it is merged
-            return true;
+            let lookup_result = root_element.borrow().lookup_property(prop);
+            if !lookup_result.is_valid()
+                || !lookup_result.is_local_to_component
+                || !matches!(
+                    lookup_result.property_visibility,
+                    PropertyVisibility::Private | PropertyVisibility::Output
+                )
+            {
+                // If there is an animation, we currently inline so that if this property
+                // is set with a binding, it is merged
+                return true;
+            }
         }
     }
 

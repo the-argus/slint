@@ -16,7 +16,7 @@ use crate::diagnostics::{BuildDiagnostics, Spanned};
 use crate::expression_tree::{
     BindingExpression, BuiltinFunction, Expression, MinMaxOp, NamedReference, Unit,
 };
-use crate::langtype::{BuiltinElement, DefaultSizeBinding, PropertyLookupResult, Type};
+use crate::langtype::{BuiltinElement, DefaultSizeBinding, Type};
 use crate::layout::{implicit_layout_info_call, LayoutConstraints, Orientation};
 use crate::object_tree::{Component, ElementRc};
 use std::collections::HashMap;
@@ -52,20 +52,40 @@ pub fn default_geometry(root_component: &Rc<Component>, diag: &mut BuildDiagnost
                 match builtin_type.default_size_binding {
                     DefaultSizeBinding::None => {
                         if elem.borrow().default_fill_parent.0 {
-                            w100 |= make_default_100(elem, parent, "width");
+                            let e_width =
+                                elem.borrow().geometry_props.as_ref().unwrap().width.clone();
+                            let p_width =
+                                parent.borrow().geometry_props.as_ref().unwrap().width.clone();
+                            w100 |= make_default_100(&e_width, &p_width);
                         } else {
                             make_default_implicit(elem, "width");
                         }
                         if elem.borrow().default_fill_parent.1 {
-                            h100 |= make_default_100(elem, parent, "height");
+                            let e_height =
+                                elem.borrow().geometry_props.as_ref().unwrap().height.clone();
+                            let p_height =
+                                parent.borrow().geometry_props.as_ref().unwrap().height.clone();
+                            h100 |= make_default_100(&e_height, &p_height);
                         } else {
                             make_default_implicit(elem, "height");
                         }
                     }
                     DefaultSizeBinding::ExpandsToParentGeometry => {
                         if !elem.borrow().child_of_layout {
-                            w100 |= make_default_100(elem, parent, "width");
-                            h100 |= make_default_100(elem, parent, "height");
+                            let (e_width, e_height) = elem
+                                .borrow()
+                                .geometry_props
+                                .as_ref()
+                                .map(|g| (g.width.clone(), g.height.clone()))
+                                .unwrap();
+                            let (p_width, p_height) = parent
+                                .borrow()
+                                .geometry_props
+                                .as_ref()
+                                .map(|g| (g.width.clone(), g.height.clone()))
+                                .unwrap();
+                            w100 |= make_default_100(&e_width, &p_width);
+                            h100 |= make_default_100(&e_height, &p_height);
                         }
                     }
                     DefaultSizeBinding::ImplicitSize => {
@@ -119,7 +139,10 @@ pub fn default_geometry(root_component: &Rc<Component>, diag: &mut BuildDiagnost
                     }
                 }
 
-                if !elem.borrow().child_of_layout && !elem.borrow().is_legacy_syntax {
+                if !elem.borrow().child_of_layout
+                    && !elem.borrow().is_legacy_syntax
+                    && builtin_type.name != "Window"
+                {
                     if !w100 {
                         maybe_center_in_parent(elem, parent, "x", "width");
                     }
@@ -152,7 +175,9 @@ fn gen_layout_info_prop(elem: &ElementRc, diag: &mut BuildDiagnostics) {
             c.borrow()
                 .layout_info_prop
                 .clone()
-                .map(|(h, v)| (Expression::PropertyReference(h), Expression::PropertyReference(v)))
+                .map(|(h, v)| {
+                    (Some(Expression::PropertyReference(h)), Some(Expression::PropertyReference(v)))
+                })
                 .or_else(|| {
                     if c.borrow().is_legacy_syntax {
                         return None;
@@ -162,24 +187,19 @@ fn gen_layout_info_prop(elem: &ElementRc, diag: &mut BuildDiagnostics) {
                         return None;
                     }
                     let explicit_constraints = LayoutConstraints::new(c, diag);
-                    if !explicit_constraints.has_explicit_restrictions() {
-                        c.borrow()
-                            .builtin_type()
-                            .map_or(false, |b| {
-                                b.default_size_binding == DefaultSizeBinding::ImplicitSize
-                            })
-                            .then(|| {
-                                (
-                                    implicit_layout_info_call(c, Orientation::Horizontal),
-                                    implicit_layout_info_call(c, Orientation::Vertical),
-                                )
-                            })
-                    } else {
-                        Some((
-                            explicit_layout_info(c, Orientation::Horizontal),
-                            explicit_layout_info(c, Orientation::Vertical),
-                        ))
-                    }
+                    let use_implicit_size = c.borrow().builtin_type().map_or(false, |b| {
+                        b.default_size_binding == DefaultSizeBinding::ImplicitSize
+                    });
+
+                    let compute = |orientation| {
+                        if !explicit_constraints.has_explicit_restrictions(orientation) {
+                            use_implicit_size.then(|| implicit_layout_info_call(c, orientation))
+                        } else {
+                            Some(explicit_layout_info(c, orientation))
+                        }
+                    };
+                    Some((compute(Orientation::Horizontal), compute(Orientation::Vertical)))
+                        .filter(|(a, b)| a.is_some() || b.is_some())
                 })
         })
         .collect::<Vec<_>>();
@@ -197,16 +217,20 @@ fn gen_layout_info_prop(elem: &ElementRc, diag: &mut BuildDiagnostics) {
     let mut expr_v = implicit_layout_info_call(elem, Orientation::Vertical);
 
     for child_info in child_infos {
-        expr_h = Expression::BinaryExpression {
-            lhs: Box::new(std::mem::take(&mut expr_h)),
-            rhs: Box::new(child_info.0),
-            op: '+',
-        };
-        expr_v = Expression::BinaryExpression {
-            lhs: Box::new(std::mem::take(&mut expr_v)),
-            rhs: Box::new(child_info.1),
-            op: '+',
-        };
+        if let Some(h) = child_info.0 {
+            expr_h = Expression::BinaryExpression {
+                lhs: Box::new(std::mem::take(&mut expr_h)),
+                rhs: Box::new(h),
+                op: '+',
+            };
+        }
+        if let Some(v) = child_info.1 {
+            expr_v = Expression::BinaryExpression {
+                lhs: Box::new(std::mem::take(&mut expr_v)),
+                rhs: Box::new(v),
+                op: '+',
+            };
+        }
     }
 
     let expr_v = BindingExpression::new_with_span(expr_v, elem.borrow().to_source_location());
@@ -278,15 +302,9 @@ fn fix_percent_size(
 
 /// Generate a size property that covers the parent.
 /// Return true if it was changed
-fn make_default_100(elem: &ElementRc, parent_element: &ElementRc, property: &str) -> bool {
-    let PropertyLookupResult { resolved_name, property_type, .. } =
-        parent_element.borrow().lookup_property(property);
-    if property_type != Type::LogicalLength {
-        return false;
-    }
-
-    elem.borrow_mut().set_binding_if_not_set(resolved_name.to_string(), || {
-        Expression::PropertyReference(NamedReference::new(parent_element, resolved_name.as_ref()))
+fn make_default_100(prop: &NamedReference, parent_prop: &NamedReference) -> bool {
+    prop.element().borrow_mut().set_binding_if_not_set(prop.name().to_string(), || {
+        Expression::PropertyReference(parent_prop.clone())
     })
 }
 
@@ -381,11 +399,6 @@ fn make_default_aspect_ratio_preserving_binding(
 
 fn maybe_center_in_parent(elem: &ElementRc, parent: &ElementRc, pos_prop: &str, size_prop: &str) {
     if elem.borrow().is_binding_set(pos_prop, false) {
-        return;
-    }
-    if elem.borrow().lookup_property(pos_prop).property_type != Type::LogicalLength
-        || elem.borrow().lookup_property(size_prop).property_type != Type::LogicalLength
-    {
         return;
     }
 

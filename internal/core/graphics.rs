@@ -14,6 +14,7 @@ extern crate alloc;
 use crate::lengths::LogicalLength;
 use crate::Coord;
 use crate::SharedString;
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
 pub use euclid;
@@ -47,11 +48,13 @@ pub use self::image::*;
 pub(crate) mod bitmapfont;
 pub use self::bitmapfont::*;
 
-#[cfg(feature = "std")]
 pub mod rendering_metrics_collector;
 
 #[cfg(feature = "box-shadow-cache")]
 pub mod boxshadowcache;
+
+pub mod border_radius;
+pub use border_radius::*;
 
 /// CachedGraphicsData allows the graphics backend to store an arbitrary piece of data associated with
 /// an item, which is typically computed by accessing properties. The dependency_tracker is used to allow
@@ -162,8 +165,9 @@ impl FontRequest {
     }
 }
 
+/// Internal module for use by cbindgen and the C++ platform API layer.
 #[cfg(feature = "ffi")]
-pub(crate) mod ffi {
+pub mod ffi {
     #![allow(unsafe_code)]
 
     /// Expand Rect so that cbindgen can see it. ( is in fact euclid::default::Rect<f32>)
@@ -196,4 +200,30 @@ pub(crate) mod ffi {
 
     #[cfg(feature = "std")]
     pub use super::path::ffi::*;
+
+    /// Conversion function used by C++ platform API layer to
+    /// convert the PhysicalSize used in the Rust WindowAdapter API
+    /// to the ffi.
+    pub fn physical_size_from_api(
+        size: crate::api::PhysicalSize,
+    ) -> crate::graphics::euclid::default::Size2D<u32> {
+        size.to_euclid()
+    }
+
+    /// Conversion function used by C++ platform API layer to
+    /// convert the PhysicalPosition used in the Rust WindowAdapter API
+    /// to the ffi.
+    pub fn physical_position_from_api(
+        position: crate::api::PhysicalPosition,
+    ) -> crate::graphics::euclid::default::Point2D<i32> {
+        position.to_euclid()
+    }
+
+    /// Conversion function used by C++ platform API layer to
+    /// convert from the ffi to PhysicalPosition.
+    pub fn physical_position_to_api(
+        position: crate::graphics::euclid::default::Point2D<i32>,
+    ) -> crate::api::PhysicalPosition {
+        crate::api::PhysicalPosition::from_euclid(position)
+    }
 }

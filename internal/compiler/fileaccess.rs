@@ -29,11 +29,51 @@ pub fn styles() -> Vec<&'static str> {
 pub fn load_file(path: &std::path::Path) -> Option<VirtualFile> {
     match path.strip_prefix("builtin:/") {
         Ok(builtin_path) => builtin_library::load_builtin_file(builtin_path),
-        Err(_) => path.exists().then(|| VirtualFile {
-            canon_path: dunce::canonicalize(path).unwrap_or_else(|_| path.into()),
-            builtin_contents: None,
+        Err(_) => path.exists().then(|| {
+            let path =
+                crate::pathutils::join(&std::env::current_dir().ok().unwrap_or_default(), path)
+                    .unwrap_or_else(|| path.to_path_buf());
+            VirtualFile { canon_path: crate::pathutils::clean_path(&path), builtin_contents: None }
         }),
     }
+}
+
+#[test]
+fn test_load_file() {
+    let builtin = load_file(&std::path::PathBuf::from(
+        "builtin:/foo/../common/./MadeWithSlint-logo-dark.svg",
+    ))
+    .unwrap();
+    assert!(builtin.is_builtin());
+    assert_eq!(
+        builtin.canon_path,
+        std::path::PathBuf::from("builtin:/common/MadeWithSlint-logo-dark.svg")
+    );
+
+    let dir = std::env::var_os("CARGO_MANIFEST_DIR").unwrap().to_string_lossy().to_string();
+    let dir_path = std::path::PathBuf::from(dir);
+
+    let non_existing = dir_path.join("XXXCargo.tomlXXX");
+    assert!(load_file(&non_existing).is_none());
+
+    assert!(dir_path.exists()); // We need some existing path for all the rest
+
+    let cargo_toml = dir_path.join("Cargo.toml");
+    let abs_cargo_toml = load_file(&cargo_toml).unwrap();
+    assert!(!abs_cargo_toml.is_builtin());
+    assert!(crate::pathutils::is_absolute(&abs_cargo_toml.canon_path));
+    assert!(abs_cargo_toml.canon_path.exists());
+
+    let current = std::env::current_dir().unwrap();
+    assert!(current.ends_with("compiler")); // This test is run in .../internal/compiler
+
+    let cargo_toml = std::path::PathBuf::from("./tests/../Cargo.toml");
+    let rel_cargo_toml = load_file(&cargo_toml).unwrap();
+    assert!(!rel_cargo_toml.is_builtin());
+    assert!(crate::pathutils::is_absolute(&rel_cargo_toml.canon_path));
+    assert!(rel_cargo_toml.canon_path.exists());
+
+    assert_eq!(abs_cargo_toml.canon_path, rel_cargo_toml.canon_path);
 }
 
 mod builtin_library {
@@ -75,9 +115,11 @@ mod builtin_library {
             library.iter().find_map(|builtin_file| {
                 if builtin_file.path == file {
                     Some(VirtualFile {
-                        canon_path: ["builtin:/", folder.to_str().unwrap(), builtin_file.path]
-                            .iter()
-                            .collect::<std::path::PathBuf>(),
+                        canon_path: std::path::PathBuf::from(format!(
+                            "builtin:/{}/{}",
+                            folder.to_str().unwrap(),
+                            builtin_file.path
+                        )),
                         builtin_contents: Some(builtin_file.contents),
                     })
                 } else {

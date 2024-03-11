@@ -3,23 +3,24 @@
 
 [package]
 name = "slint-interpreter"
-version = "1.2.0"
-authors = ["Slint Developers <info@slint.dev>"]
-edition = "2021"
-license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial"
 description = "Interpreter library for Slint"
-repository = "https://github.com/slint-ui/slint"
-homepage = "https://slint.rs"
-categories = ["gui", "rendering::engine"]
-keywords = ["gui", "toolkit", "graphics", "design", "ui"]
+authors.workspace = true
+documentation.workspace = true
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
+version.workspace = true
+categories = ["gui", "rendering::engine", "development-tools"]
 
 [lib]
 path = "lib.rs"
 
 [features]
 
-default = ["std", "backend-winit", "renderer-femtovg", "backend-qt", "accessibility", "compat-1-2"]
+default = ["backend-default", "renderer-femtovg", "accessibility", "compat-1-2"]
 
 ## Mandatory feature:
 ## This feature is required to keep the compatibility with Slint 1.2
@@ -38,8 +39,8 @@ ffi = ["spin_on", "i-slint-core/ffi"]
 # NOTE: this is not a semver compatible feature
 highlight = []
 
-## Enable use of the Rust standard library.
-std = ["i-slint-core/std"]
+# unused (std is mandatory for the interpreter)
+std = []
 
 #! ### Backends
 
@@ -64,9 +65,18 @@ backend-winit-x11 = ["i-slint-backend-selector/backend-winit-x11", "std"]
 ## with support for the Wayland window system on Unix.
 backend-winit-wayland = ["i-slint-backend-selector/backend-winit-wayland", "std"]
 
-## Vulkan/EGL and libinput on Linux are used to render the application in full screen mode, without any
-## windowing system.
+## KMS with Vulkan or EGL and libinput on Linux are used to render the application in full screen mode, without any
+## windowing system. Requires libseat. If you don't have libseat, select `backend-linuxkms-noseat` instead. (Experimental)
 backend-linuxkms = ["i-slint-backend-selector/backend-linuxkms", "std"]
+
+## KMS with Vulkan or EGL and libinput on Linux are used to render the application in full screen mode, without any
+## windowing system. Requires libseat. (Experimental)
+backend-linuxkms-noseat = ["i-slint-backend-selector/backend-linuxkms-noseat", "std"]
+
+## Alias to a backend and renderer that depends on the platform.
+## Will select the Qt backend on linux if present, and the winit otherwise
+backend-default = ["i-slint-backend-selector/default", "i-slint-backend-qt"]
+
 
 ## Make the winit backend capable of rendering using the [femtovg](https://crates.io/crates/femtovg) crate.
 renderer-femtovg = ["i-slint-backend-selector/renderer-femtovg", "std"]
@@ -97,13 +107,17 @@ renderer-winit-software = ["renderer-software"]
 ## APIs to support screen readers and other assistive technologies.
 accessibility = ["i-slint-backend-selector/accessibility"]
 
-[dependencies]
-i-slint-compiler = { version = "=1.2.0", path = "../compiler" }
-i-slint-common = { version = "=1.2.0", path = "../common" }
-i-slint-core = { version = "=1.2.0", path = "../core", features = ["rtti"] }
-i-slint-backend-selector = { version = "=1.2.0", path = "../../internal/backends/selector", features = ["rtti"] }
+## Features used internally by Slint tooling that are not stable and come without
+## any stability guarantees whatsoever.
+internal = []
 
-vtable = { version = "0.1.6", path="../../helper_crates/vtable" }
+[dependencies]
+i-slint-compiler = { workspace = true  }
+i-slint-common = { workspace = true }
+i-slint-core = { workspace = true, features = ["default", "rtti"] }
+i-slint-backend-selector = { workspace = true, features = ["rtti"] }
+
+vtable = { workspace = true }
 
 derive_more = "0.99.5"
 generativity = "1"
@@ -111,17 +125,18 @@ lyon_path = { version = "1.0" }
 once_cell = "1.5"
 thiserror = "1"
 document-features = { version = "0.2.0", optional = true }
-
-[dependencies.spin_on]
-version = "0.1"
-optional = true
+spin_on = { version = "0.1", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-i-slint-backend-winit = { version = "=1.2.0", path = "../../internal/backends/winit" }
+i-slint-backend-winit = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# this line is there to add the "enable" feature by default, but only on linux
+i-slint-backend-qt = { workspace = true, features = [ "enable" ], optional = true }
+
 
 [dev-dependencies]
 i-slint-backend-testing = { path = "../../internal/backends/testing" }
-
 spin_on = "0.1"
 
 [package.metadata.docs.rs]

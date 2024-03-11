@@ -9,10 +9,6 @@ use super::*;
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeCheckBox {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     pub enabled: Property<bool>,
     pub has_focus: Property<bool>,
     pub toggled: Callback<VoidArg>,
@@ -29,13 +25,6 @@ impl Item for NativeCheckBox {
         self.widget_ptr.set(cpp! { unsafe [animation_tracker_property_ptr as "void*"] -> SlintTypeErasedWidgetPtr as "std::unique_ptr<SlintTypeErasedWidget>"  {
             return make_unique_animated_widget<QCheckBox>(animation_tracker_property_ptr);
         }})
-    }
-
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
     }
 
     fn layout_info(
@@ -56,11 +45,15 @@ impl Item for NativeCheckBox {
             return qApp->style()->sizeFromContents(QStyle::CT_CheckBox, &option, option.rect.size(), widget);
         });
         match orientation {
-            Orientation::Horizontal => {
-                LayoutInfo { min: size.width as f32, stretch: 1., ..LayoutInfo::default() }
-            }
+            Orientation::Horizontal => LayoutInfo {
+                min: size.width as f32,
+                preferred: size.width as f32,
+                stretch: 1.,
+                ..LayoutInfo::default()
+            },
             Orientation::Vertical => LayoutInfo {
                 min: size.height as f32,
+                preferred: size.height as f32,
                 max: size.height as f32,
                 ..LayoutInfo::default()
             },
@@ -80,18 +73,14 @@ impl Item for NativeCheckBox {
         self: Pin<&Self>,
         event: MouseEvent,
         _window_adapter: &Rc<dyn WindowAdapter>,
-        _self_rc: &i_slint_core::items::ItemRc,
+        self_rc: &i_slint_core::items::ItemRc,
     ) -> InputEventResult {
         if !self.enabled() {
             return InputEventResult::EventIgnored;
         }
         if let MouseEvent::Released { position, .. } = event {
-            if LogicalRect::new(
-                LogicalPoint::default(),
-                LogicalSize::from_lengths(self.width(), self.height()),
-            )
-            .contains(position)
-            {
+            let geo = self_rc.geometry();
+            if LogicalRect::new(LogicalPoint::default(), geo.size).contains(position) {
                 Self::FIELD_OFFSETS.checked.apply_pin(self).set(!self.checked());
                 Self::FIELD_OFFSETS.toggled.apply_pin(self).call(&())
             }
@@ -154,7 +143,7 @@ impl Item for NativeCheckBox {
             initial_state as "int"
         ] {
             QStyleOptionButton option;
-            option.initFrom(widget);
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             option.text = std::move(text);
             option.rect = QRect(QPoint(), size / dpr);

@@ -4,20 +4,30 @@
 import { Theme } from "../theme.slint";
 
 component ValueDelegate {
-    private property <float> display-value;
-
     in property <bool> active;
     in property <string> title <=> i-title.text;
     in property <string> unit <=> i-unit.text;
     in property <float> value;
     in property <bool> alternative-colors;
 
+    private property <float> display-value;
+
+    states [
+        active when active : {
+            display-value: value;
+
+            in {
+                animate display-value { duration: Theme.durations.slow; }
+            }
+        }
+    ]
+
     HorizontalLayout {
         spacing: 15px;
 
         Rectangle {
             min_width: 1px;
-            background: alternative-colors ? Theme.palette.slint-blue-300 : Theme.palette.limon-green;
+            background: alternative-colors ? Theme.palette.slint-blue-300 : Theme.palette.lemon-green;
             horizontal-stretch: 0;
         }
 
@@ -26,7 +36,7 @@ component ValueDelegate {
             horizontal-stretch: 1;
 
             i-title := Text {
-                color: alternative-colors ? Theme.palette.slint-blue-300 : Theme.palette.limon-green;
+                color: alternative-colors ? Theme.palette.slint-blue-300 : Theme.palette.lemon-green;
                 font-size: Theme.typo.label.size;
                 font-weight: Theme.typo.label.weight;
             }
@@ -46,23 +56,13 @@ component ValueDelegate {
                 i-unit := Text {
                     y: Theme.spaces.small;
                     vertical-alignment: center;
-                    color: alternative-colors ? Theme.palette.slint-blue-300 : Theme.palette.limon-green;
+                    color: alternative-colors ? Theme.palette.slint-blue-300 : Theme.palette.lemon-green;
                     font-size: Theme.typo.label-light.size;
                     font-weight: Theme.typo.label-light.weight;
                 }
             }
         }
     }
-
-    states [
-        active when active : {
-            display-value: value;
-
-            in {
-                animate display-value { duration: Theme.durations.slow; }
-            }
-        }
-    ]
 }
 
 export struct Value {
@@ -85,7 +85,7 @@ export component ValueDisplay {
         width: 100%;
         height: 100%;
         border-radius: 4px;
-        background: alternative-colors ? Theme.palette.slint-blue-gradient : Theme.palette.limon-green-gradient;
+        background: alternative-colors ? Theme.palette.slint-blue-gradient : Theme.palette.lemon-green-gradient;
     }
 
     if(model.length > 0 && !vertical) : HorizontalLayout {

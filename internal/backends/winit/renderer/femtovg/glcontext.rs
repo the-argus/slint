@@ -1,7 +1,7 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, rc::Rc};
 
 use glutin::{
     context::{ContextApi, ContextAttributesBuilder},
@@ -10,15 +10,16 @@ use glutin::{
     surface::{SurfaceAttributesBuilder, WindowSurface},
 };
 use i_slint_core::platform::PlatformError;
-use raw_window_handle::HasRawWindowHandle;
+use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 pub struct OpenGLContext {
     context: glutin::context::PossiblyCurrentContext,
     surface: glutin::surface::Surface<glutin::surface::WindowSurface>,
+    winit_window: Rc<winit::window::Window>,
 }
 
-unsafe impl i_slint_core::platform::OpenGLInterface for OpenGLContext {
-    fn ensure_current(&self) -> Result<(), Box<dyn std::error::Error>> {
+unsafe impl i_slint_renderer_femtovg::OpenGLInterface for OpenGLContext {
+    fn ensure_current(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if !self.context.is_current() {
             self.context.make_current(&self.surface).map_err(|glutin_error| -> PlatformError {
                 format!("FemtoVG: Error making context current: {glutin_error}").into()
@@ -26,7 +27,9 @@ unsafe impl i_slint_core::platform::OpenGLInterface for OpenGLContext {
         }
         Ok(())
     }
-    fn swap_buffers(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn swap_buffers(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.winit_window.pre_present_notify();
+
         self.surface.swap_buffers(&self.context).map_err(|glutin_error| -> PlatformError {
             format!("FemtoVG: Error swapping buffers: {glutin_error}").into()
         })?;
@@ -38,7 +41,7 @@ unsafe impl i_slint_core::platform::OpenGLInterface for OpenGLContext {
         &self,
         width: NonZeroU32,
         height: NonZeroU32,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.ensure_current()?;
         self.surface.resize(&self.context, width, height);
 
@@ -54,7 +57,7 @@ impl OpenGLContext {
     pub fn new_context<T>(
         window_builder: winit::window::WindowBuilder,
         window_target: &winit::event_loop::EventLoopWindowTarget<T>,
-    ) -> Result<(winit::window::Window, Self), PlatformError> {
+    ) -> Result<(Rc<winit::window::Window>, Self), PlatformError> {
         let config_template_builder = glutin::config::ConfigTemplateBuilder::new();
 
         // On macOS, there's only one GL config and that's initialized based on the values in the config template
@@ -63,11 +66,12 @@ impl OpenGLContext {
         // On EGL/GLX/WGL there are system provided configs that may or may not support transparency. Here in case
         // the system doesn't support transparency, we want to fall back to a config that doesn't - better than not
         // rendering anything at all. So we don't want to limit the configurations we get to see early on.
+        // Commented out due to https://github.com/rust-windowing/glutin/issues/1640
         #[cfg(target_os = "macos")]
         let config_template_builder = config_template_builder.with_transparency(true);
 
         let (window, gl_config) = glutin_winit::DisplayBuilder::new()
-            .with_preference(glutin_winit::ApiPrefence::FallbackEgl)
+            .with_preference(glutin_winit::ApiPreference::FallbackEgl)
             .with_window_builder(Some(window_builder.clone()))
             .build(window_target, config_template_builder, |it| {
                 it.reduce(|accum, config| {
@@ -83,7 +87,11 @@ impl OpenGLContext {
                 .expect("internal error: Could not find any matching GL configuration")
             })
             .map_err(|glutin_err| {
-                format!("Error creating OpenGL display with glutin: {}", glutin_err)
+                format!(
+                    "Error creating OpenGL display ({:#?}) with glutin: {}",
+                    window_target.raw_display_handle(),
+                    glutin_err
+                )
             })?;
 
         let gl_display = gl_config.display();
@@ -175,6 +183,16 @@ impl OpenGLContext {
             );
         }
 
-        Ok((window, Self { context, surface }))
+        // Try to default to vsync and ignore if the driver doesn't support it.
+        surface
+            .set_swap_interval(
+                &context,
+                glutin::surface::SwapInterval::Wait(NonZeroU32::new(1).unwrap()),
+            )
+            .ok();
+
+        let window = Rc::new(window);
+
+        Ok((window.clone(), Self { context, surface, winit_window: window }))
     }
 }

@@ -11,8 +11,9 @@
 #include "slint_internal.h"
 #include "slint_size.h"
 #include "slint_point.h"
-#include "slint_backend_internal.h"
+#include "slint_platform_internal.h"
 #include "slint_qt_internal.h"
+#include "slint_window.h"
 
 #include <vector>
 #include <memory>
@@ -23,9 +24,7 @@
 #include <functional>
 #include <concepts>
 
-#ifdef SLINT_FEATURE_STD
-#    include <iostream>
-#    include <thread>
+#ifndef SLINT_FEATURE_FREESTANDING
 #    include <mutex>
 #    include <condition_variable>
 #endif
@@ -39,247 +38,17 @@
 /// \endrst
 namespace slint {
 
-// Bring opaque structure in scope
 namespace private_api {
-using cbindgen_private::ComponentVTable;
-using cbindgen_private::ItemVTable;
-using ComponentRc = vtable::VRc<private_api::ComponentVTable>;
-using ComponentRef = vtable::VRef<private_api::ComponentVTable>;
+// Bring opaque structure in scope
+using namespace cbindgen_private;
+using ItemTreeRef = vtable::VRef<private_api::ItemTreeVTable>;
 using IndexRange = cbindgen_private::IndexRange;
 using ItemRef = vtable::VRef<private_api::ItemVTable>;
 using ItemVisitorRefMut = vtable::VRefMut<cbindgen_private::ItemVisitorVTable>;
-using cbindgen_private::ComponentWeak;
-using cbindgen_private::ItemWeak;
-using cbindgen_private::TraversalOrder;
-}
-
-#if !defined(DOXYGEN)
-namespace platform {
-class SkiaRenderer;
-class SoftwareRenderer;
-}
-#endif
-
-namespace private_api {
 using ItemTreeNode = cbindgen_private::ItemTreeNode;
 using ItemArrayEntry =
         vtable::VOffset<uint8_t, slint::cbindgen_private::ItemVTable, vtable::AllowPin>;
 using ItemArray = slint::cbindgen_private::Slice<ItemArrayEntry>;
-using cbindgen_private::KeyboardModifiers;
-using cbindgen_private::KeyEvent;
-using cbindgen_private::PointerEvent;
-using cbindgen_private::TableColumn;
-
-/// Internal function that checks that the API that must be called from the main
-/// thread is indeed called from the main thread, or abort the program otherwise
-///
-/// Most API should be called from the main thread. When using thread one must
-/// use slint::invoke_from_event_loop
-inline void assert_main_thread()
-{
-#ifdef SLINT_FEATURE_STD
-#    ifndef NDEBUG
-    static auto main_thread_id = std::this_thread::get_id();
-    if (main_thread_id != std::this_thread::get_id()) {
-        std::cerr << "A function that should be only called from the main thread was called from a "
-                     "thread."
-                  << std::endl;
-        std::cerr << "Most API should be called from the main thread. When using thread one must "
-                     "use slint::invoke_from_event_loop."
-                  << std::endl;
-        std::abort();
-    }
-#    endif
-#endif
-}
-
-class WindowAdapterRc
-{
-public:
-    explicit WindowAdapterRc(cbindgen_private::WindowAdapterRcOpaque adopted_inner)
-    {
-        assert_main_thread();
-        cbindgen_private::slint_windowrc_clone(&adopted_inner, &inner);
-    }
-    WindowAdapterRc() { cbindgen_private::slint_windowrc_init(&inner); }
-    ~WindowAdapterRc() { cbindgen_private::slint_windowrc_drop(&inner); }
-    WindowAdapterRc(const WindowAdapterRc &other) : WindowAdapterRc(other.inner) { }
-    WindowAdapterRc(WindowAdapterRc &&) = delete;
-    WindowAdapterRc &operator=(WindowAdapterRc &&) = delete;
-    WindowAdapterRc &operator=(const WindowAdapterRc &other)
-    {
-        assert_main_thread();
-        if (this != &other) {
-            cbindgen_private::slint_windowrc_drop(&inner);
-            cbindgen_private::slint_windowrc_clone(&other.inner, &inner);
-        }
-        return *this;
-    }
-
-    void show() const { slint_windowrc_show(&inner); }
-    void hide() const { slint_windowrc_hide(&inner); }
-    bool is_visible() const { return slint_windowrc_is_visible(&inner); }
-
-    float scale_factor() const { return slint_windowrc_get_scale_factor(&inner); }
-    void set_scale_factor(float value) const { slint_windowrc_set_scale_factor(&inner, value); }
-
-    bool dark_color_scheme() const { return slint_windowrc_dark_color_scheme(&inner); }
-
-    bool text_input_focused() const { return slint_windowrc_get_text_input_focused(&inner); }
-    void set_text_input_focused(bool value) const
-    {
-        slint_windowrc_set_text_input_focused(&inner, value);
-    }
-
-    template<typename Component, typename ItemArray>
-    void unregister_component(Component *c, ItemArray items) const
-    {
-        cbindgen_private::slint_unregister_component(
-                vtable::VRef<ComponentVTable> { &Component::static_vtable, c }, items, &inner);
-    }
-
-    void set_focus_item(const ComponentRc &component_rc, uintptr_t item_index)
-    {
-        cbindgen_private::ItemRc item_rc { component_rc, item_index };
-        cbindgen_private::slint_windowrc_set_focus_item(&inner, &item_rc);
-    }
-
-    template<typename Component>
-    void set_component(const Component &c) const
-    {
-        auto self_rc = (*c.self_weak.lock()).into_dyn();
-        slint_windowrc_set_component(&inner, &self_rc);
-    }
-
-    template<typename Component, typename Parent>
-    void show_popup(const Parent *parent_component, cbindgen_private::Point p, bool close_on_click,
-                    cbindgen_private::ItemRc parent_item) const
-    {
-        auto popup = Component::create(parent_component).into_dyn();
-        cbindgen_private::slint_windowrc_show_popup(&inner, &popup, p, close_on_click,
-                                                    &parent_item);
-    }
-
-    void close_popup() const { cbindgen_private::slint_windowrc_close_popup(&inner); }
-
-    template<std::invocable<RenderingState, GraphicsAPI> F>
-    std::optional<SetRenderingNotifierError> set_rendering_notifier(F callback) const
-    {
-        auto actual_cb = [](RenderingState state, GraphicsAPI graphics_api, void *data) {
-            (*reinterpret_cast<F *>(data))(state, graphics_api);
-        };
-        SetRenderingNotifierError err;
-        if (cbindgen_private::slint_windowrc_set_rendering_notifier(
-                    &inner, actual_cb,
-                    [](void *user_data) { delete reinterpret_cast<F *>(user_data); },
-                    new F(std::move(callback)), &err)) {
-            return {};
-        } else {
-            return err;
-        }
-    }
-
-    // clang-format off
-    template<std::invocable F>
-        requires(std::is_convertible_v<std::invoke_result_t<F>, CloseRequestResponse>)
-    void on_close_requested(F callback) const
-    // clang-format on
-    {
-        auto actual_cb = [](void *data) { return (*reinterpret_cast<F *>(data))(); };
-        cbindgen_private::slint_windowrc_on_close_requested(
-                &inner, actual_cb, [](void *user_data) { delete reinterpret_cast<F *>(user_data); },
-                new F(std::move(callback)));
-    }
-
-    void request_redraw() const { cbindgen_private::slint_windowrc_request_redraw(&inner); }
-
-    slint::PhysicalPosition position() const
-    {
-        slint::PhysicalPosition pos;
-        cbindgen_private::slint_windowrc_position(&inner, &pos);
-        return pos;
-    }
-
-    void set_logical_position(const slint::LogicalPosition &pos)
-    {
-        cbindgen_private::slint_windowrc_set_logical_position(&inner, &pos);
-    }
-
-    void set_physical_position(const slint::PhysicalPosition &pos)
-    {
-        cbindgen_private::slint_windowrc_set_physical_position(&inner, &pos);
-    }
-
-    slint::PhysicalSize size() const
-    {
-        return slint::PhysicalSize(cbindgen_private::slint_windowrc_size(&inner));
-    }
-
-    void set_logical_size(const slint::LogicalSize &size)
-    {
-        cbindgen_private::slint_windowrc_set_logical_size(&inner, &size);
-    }
-
-    void set_physical_size(const slint::PhysicalSize &size)
-    {
-        cbindgen_private::slint_windowrc_set_physical_size(&inner, &size);
-    }
-
-    void dispatch_key_event(const cbindgen_private::KeyInputEvent &event)
-    {
-        private_api::assert_main_thread();
-        cbindgen_private::slint_windowrc_dispatch_key_event(&inner, &event);
-    }
-
-    /// Send a pointer event to this window
-    void dispatch_pointer_event(const cbindgen_private::MouseEvent &event)
-    {
-        private_api::assert_main_thread();
-        cbindgen_private::slint_windowrc_dispatch_pointer_event(&inner, event);
-    }
-
-    /// Registers a font by the specified path. The path must refer to an existing
-    /// TrueType font.
-    /// \returns an empty optional on success, otherwise an error string
-    inline std::optional<SharedString> register_font_from_path(const SharedString &path)
-    {
-        SharedString maybe_err;
-        cbindgen_private::slint_register_font_from_path(&inner, &path, &maybe_err);
-        if (!maybe_err.empty()) {
-            return maybe_err;
-        } else {
-            return {};
-        }
-    }
-
-    /// Registers a font by the data. The data must be valid TrueType font data.
-    /// \returns an empty optional on success, otherwise an error string
-    inline std::optional<SharedString> register_font_from_data(const uint8_t *data, std::size_t len)
-    {
-        SharedString maybe_err;
-        cbindgen_private::slint_register_font_from_data(
-                &inner, { const_cast<uint8_t *>(data), len }, &maybe_err);
-        if (!maybe_err.empty()) {
-            return maybe_err;
-        } else {
-            return {};
-        }
-    }
-
-    /// Registers a bitmap font for use with the software renderer.
-    inline void register_bitmap_font(const cbindgen_private::BitmapFont &font)
-    {
-        cbindgen_private::slint_register_bitmap_font(&inner, &font);
-    }
-
-    /// \private
-    const cbindgen_private::WindowAdapterRcOpaque &handle() const { return inner; }
-
-private:
-    friend class slint::platform::SkiaRenderer;
-    friend class slint::platform::SoftwareRenderer;
-    cbindgen_private::WindowAdapterRcOpaque inner;
-};
 
 constexpr inline ItemTreeNode make_item_node(uint32_t child_count, uint32_t child_index,
                                              uint32_t parent_index, uint32_t item_array_index,
@@ -290,22 +59,30 @@ constexpr inline ItemTreeNode make_item_node(uint32_t child_count, uint32_t chil
                                                     item_array_index } };
 }
 
-constexpr inline ItemTreeNode make_dyn_node(std::uintptr_t offset, std::uint32_t parent_index)
+constexpr inline ItemTreeNode make_dyn_node(std::uint32_t offset, std::uint32_t parent_index)
 {
     return ItemTreeNode { ItemTreeNode::DynamicTree_Body { ItemTreeNode::Tag::DynamicTree, offset,
                                                            parent_index } };
 }
 
-inline ItemRef get_item_ref(ComponentRef component,
-                            const cbindgen_private::Slice<ItemTreeNode> item_tree,
+inline ItemRef get_item_ref(ItemTreeRef item_tree,
+                            const cbindgen_private::Slice<ItemTreeNode> item_tree_array,
                             const private_api::ItemArray item_array, int index)
 {
-    const auto item_array_index = item_tree.ptr[index].item.item_array_index;
+    const auto item_array_index = item_tree_array.ptr[index].item.item_array_index;
     const auto item = item_array[item_array_index];
-    return ItemRef { item.vtable, reinterpret_cast<char *>(component.instance) + item.offset };
+    return ItemRef { item.vtable, reinterpret_cast<char *>(item_tree.instance) + item.offset };
 }
 
-inline void dealloc(const ComponentVTable *, uint8_t *ptr, vtable::Layout layout)
+/// Convert a slint `{height: length, width: length, x: length, y: length}` to a Rect
+inline cbindgen_private::Rect convert_anonymous_rect(std::tuple<float, float, float, float> tuple)
+{
+    // alphabetical order
+    auto [h, w, x, y] = tuple;
+    return cbindgen_private::Rect { .x = x, .y = y, .width = w, .height = h };
+}
+
+inline void dealloc(const ItemTreeVTable *, uint8_t *ptr, [[maybe_unused]] vtable::Layout layout)
 {
 #ifdef __cpp_sized_deallocation
     ::operator delete(reinterpret_cast<void *>(ptr), layout.size,
@@ -318,9 +95,9 @@ inline void dealloc(const ComponentVTable *, uint8_t *ptr, vtable::Layout layout
 }
 
 template<typename T>
-inline vtable::Layout drop_in_place(ComponentRef component)
+inline vtable::Layout drop_in_place(ItemTreeRef item_tree)
 {
-    reinterpret_cast<T *>(component.instance)->~T();
+    reinterpret_cast<T *>(item_tree.instance)->~T();
     return vtable::Layout { sizeof(T), alignof(T) };
 }
 
@@ -337,16 +114,6 @@ inline vtable::Layout drop_in_place(ComponentRef component)
 #    endif
 #endif // !defined(DOXYGEN)
 
-template<typename T>
-struct ReturnWrapper
-{
-    ReturnWrapper(T val) : value(std::move(val)) { }
-    T value;
-};
-template<>
-struct ReturnWrapper<void>
-{
-};
 } // namespace private_api
 
 template<typename T>
@@ -358,12 +125,12 @@ class ComponentWeakHandle;
 template<typename T>
 class ComponentHandle
 {
-    vtable::VRc<private_api::ComponentVTable, T> inner;
+    vtable::VRc<private_api::ItemTreeVTable, T> inner;
     friend class ComponentWeakHandle<T>;
 
 public:
     /// internal constructor
-    ComponentHandle(const vtable::VRc<private_api::ComponentVTable, T> &inner) : inner(inner) { }
+    ComponentHandle(const vtable::VRc<private_api::ItemTreeVTable, T> &inner) : inner(inner) { }
 
     /// Arrow operator that implements pointer semantics.
     const T *operator->() const
@@ -391,14 +158,14 @@ public:
     }
 
     /// internal function that returns the internal handle
-    vtable::VRc<private_api::ComponentVTable> into_dyn() const { return inner.into_dyn(); }
+    vtable::VRc<private_api::ItemTreeVTable> into_dyn() const { return inner.into_dyn(); }
 };
 
 /// A weak reference to the component. Can be constructed from a `ComponentHandle<T>`
 template<typename T>
 class ComponentWeakHandle
 {
-    vtable::VWeak<private_api::ComponentVTable, T> inner;
+    vtable::VWeak<private_api::ItemTreeVTable, T> inner;
 
 public:
     /// Constructs a null ComponentWeakHandle. lock() will always return empty.
@@ -419,290 +186,6 @@ public:
     }
 };
 
-/// This class represents a window towards the windowing system, that's used to render the
-/// scene of a component. It provides API to control windowing system specific aspects such
-/// as the position on the screen.
-class Window
-{
-public:
-    /// \private
-    /// Internal function used by the generated code to construct a new instance of this
-    /// public API wrapper.
-    explicit Window(const private_api::WindowAdapterRc &windowrc) : inner(windowrc) { }
-    Window(const Window &other) = delete;
-    Window &operator=(const Window &other) = delete;
-    Window(Window &&other) = delete;
-    Window &operator=(Window &&other) = delete;
-    /// Destroys this window. Window instances are explicitly shared and reference counted.
-    /// If this window instance is the last one referencing the window towards the windowing
-    /// system, then it will also become hidden and destroyed.
-    ~Window() = default;
-
-    /// Registers the window with the windowing system in order to make it visible on the screen.
-    void show() { inner.show(); }
-    /// De-registers the window from the windowing system, therefore hiding it.
-    void hide() { inner.hide(); }
-
-    /// Returns the visibility state of the window. This function can return false even if you
-    /// previously called show() on it, for example if the user minimized the window.
-    bool is_visible() const { return inner.is_visible(); }
-
-    /// This function allows registering a callback that's invoked during the different phases of
-    /// rendering. This allows custom rendering on top or below of the scene.
-    ///
-    /// The provided callback must be callable with a slint::RenderingState and the
-    /// slint::GraphicsAPI argument.
-    ///
-    /// On success, the function returns a std::optional without value. On error, the function
-    /// returns the error code as value in the std::optional.
-    template<std::invocable<RenderingState, GraphicsAPI> F>
-    std::optional<SetRenderingNotifierError> set_rendering_notifier(F &&callback) const
-    {
-        return inner.set_rendering_notifier(std::forward<F>(callback));
-    }
-
-    /// This function allows registering a callback that's invoked when the user tries to close
-    /// a window.
-    /// The callback has to return a CloseRequestResponse.
-    // clang-format off
-    template<std::invocable F>
-        requires(std::is_convertible_v<std::invoke_result_t<F>, CloseRequestResponse>)
-    void on_close_requested(F &&callback) const
-    // clang-format on
-    {
-        return inner.on_close_requested(std::forward<F>(callback));
-    }
-
-    /// This function issues a request to the windowing system to redraw the contents of the window.
-    void request_redraw() const { inner.request_redraw(); }
-
-    /// Returns the position of the window on the screen, in physical screen coordinates and
-    /// including a window frame (if present).
-    slint::PhysicalPosition position() const { return inner.position(); }
-
-    /// Sets the position of the window on the screen, in physical screen coordinates and including
-    /// a window frame (if present).
-    /// Note that on some windowing systems, such as Wayland, this functionality is not available.
-    void set_position(const slint::LogicalPosition &pos) { inner.set_logical_position(pos); }
-    /// Sets the position of the window on the screen, in physical screen coordinates and including
-    /// a window frame (if present).
-    /// Note that on some windowing systems, such as Wayland, this functionality is not available.
-    void set_position(const slint::PhysicalPosition &pos) { inner.set_physical_position(pos); }
-
-    /// Returns the size of the window on the screen, in physical screen coordinates and excluding
-    /// a window frame (if present).
-    slint::PhysicalSize size() const { return inner.size(); }
-
-    /// Resizes the window to the specified size on the screen, in logical pixels and excluding
-    /// a window frame (if present).
-    void set_size(const slint::LogicalSize &size) { inner.set_logical_size(size); }
-    /// Resizes the window to the specified size on the screen, in physical pixels and excluding
-    /// a window frame (if present).
-    void set_size(const slint::PhysicalSize &size) { inner.set_physical_size(size); }
-
-    /// This function returns the scale factor that allows converting between logical and
-    /// physical pixels.
-    float scale_factor() const { return inner.scale_factor(); }
-
-    /// Dispatch a key press event to the scene.
-    ///
-    /// Use this when you're implementing your own backend and want to forward user input events.
-    ///
-    /// The \a text is the unicode representation of the key.
-    void dispatch_key_press_event(const SharedString &text)
-    {
-        cbindgen_private::KeyInputEvent event { text, cbindgen_private::KeyEventType::KeyPressed, 0,
-                                                0 };
-        inner.dispatch_key_event(event);
-    }
-
-    /// Dispatch a key release event to the scene.
-    ///
-    /// Use this when you're implementing your own backend and want to forward user input events.
-    ///
-    /// The \a text is the unicode representation of the key.
-    void dispatch_key_release_event(const SharedString &text)
-    {
-        cbindgen_private::KeyInputEvent event { text, cbindgen_private::KeyEventType::KeyReleased,
-                                                0, 0 };
-        inner.dispatch_key_event(event);
-    }
-
-    /// Dispatches a pointer or mouse press event to the scene.
-    ///
-    /// Use this function when you're implementing your own backend and want to forward user
-    /// pointer/mouse events.
-    ///
-    /// \a pos represents the logical position of the pointer relative to the window.
-    /// \a button is the button that was pressed.
-    void dispatch_pointer_press_event(LogicalPosition pos, PointerEventButton button)
-    {
-        using slint::cbindgen_private::MouseEvent;
-        MouseEvent event { .tag = MouseEvent::Tag::Pressed,
-                           .pressed = MouseEvent::Pressed_Body { .position = { pos.x, pos.y },
-                                                                 .button = button,
-                                                                 .click_count = 0 } };
-        inner.dispatch_pointer_event(event);
-    }
-    /// Dispatches a pointer or mouse release event to the scene.
-    ///
-    /// Use this function when you're implementing your own backend and want to forward user
-    /// pointer/mouse events.
-    ///
-    /// \a pos represents the logical position of the pointer relative to the window.
-    /// \a button is the button that was released.
-    void dispatch_pointer_release_event(LogicalPosition pos, PointerEventButton button)
-    {
-        using slint::cbindgen_private::MouseEvent;
-        MouseEvent event { .tag = MouseEvent::Tag::Released,
-                           .released = MouseEvent::Released_Body { .position = { pos.x, pos.y },
-                                                                   .button = button,
-                                                                   .click_count = 0 } };
-        inner.dispatch_pointer_event(event);
-    }
-    /// Dispatches a pointer exit event to the scene.
-    ///
-    /// Use this function when you're implementing your own backend and want to forward user
-    /// pointer/mouse events.
-    ///
-    /// This event is triggered when the pointer exits the window.
-    void dispatch_pointer_exit_event()
-    {
-        using slint::cbindgen_private::MouseEvent;
-        MouseEvent event { .tag = MouseEvent::Tag::Exit, .moved = {} };
-        inner.dispatch_pointer_event(event);
-    }
-
-    /// Dispatches a pointer move event to the scene.
-    ///
-    /// Use this function when you're implementing your own backend and want to forward user
-    /// pointer/mouse events.
-    ///
-    /// \a pos represents the logical position of the pointer relative to the window.
-    void dispatch_pointer_move_event(LogicalPosition pos)
-    {
-        using slint::cbindgen_private::MouseEvent;
-        MouseEvent event { .tag = MouseEvent::Tag::Moved,
-                           .moved = MouseEvent::Moved_Body { .position = { pos.x, pos.y } } };
-        inner.dispatch_pointer_event(event);
-    }
-
-    /// Dispatches a scroll (or wheel) event to the scene.
-    ///
-    /// Use this function when you're implementing your own backend and want to forward user wheel
-    /// events.
-    ///
-    /// \a parameter represents the logical position of the pointer relative to the window.
-    /// \a delta_x and \a delta_y represent the scroll delta values in the X and Y
-    /// directions in logical pixels.
-    void dispatch_pointer_scroll_event(LogicalPosition pos, float delta_x, float delta_y)
-    {
-        using slint::cbindgen_private::MouseEvent;
-        MouseEvent event { .tag = MouseEvent::Tag::Wheel,
-                           .wheel = MouseEvent::Wheel_Body { .position = { pos.x, pos.y },
-                                                             .delta_x = delta_x,
-                                                             .delta_y = delta_y } };
-        inner.dispatch_pointer_event(event);
-    }
-
-    /// Set the logical size of this window after a resize event
-    ///
-    /// The backend must send this event to ensure that the `width` and `height` property of the
-    /// root Window element are properly set.
-    void dispatch_resize_event(slint::LogicalSize s)
-    {
-        private_api::assert_main_thread();
-        cbindgen_private::slint_windowrc_dispatch_resize_event(&inner.handle(), s.width, s.height);
-    }
-
-    /// The window's scale factor has changed. This can happen for example when the display's
-    /// resolution changes, the user selects a new scale factor in the system settings, or the
-    /// window is moved to a different screen. Platform implementations should dispatch this event
-    /// also right after the initial window creation, to set the initial scale factor the windowing
-    /// system provided for the window.
-    void dispatch_scale_factor_change_event(float factor)
-    {
-        private_api::assert_main_thread();
-        cbindgen_private::slint_windowrc_dispatch_scale_factor_change_event(&inner.handle(),
-                                                                            factor);
-    }
-
-    /// Returns true if there is an animation currently active on any property in the Window.
-    bool has_active_animations() const
-    {
-        private_api::assert_main_thread();
-        return cbindgen_private::slint_windowrc_has_active_animations(&inner.handle());
-    }
-
-    /// \private
-    private_api::WindowAdapterRc &window_handle() { return inner; }
-    /// \private
-    const private_api::WindowAdapterRc &window_handle() const { return inner; }
-
-private:
-    private_api::WindowAdapterRc inner;
-};
-
-/// A Timer that can call a callback at repeated interval
-///
-/// Use the static single_shot function to make a single shot timer
-struct Timer
-{
-    /// Construct a null timer. Use the start() method to activate the timer with a mode, interval
-    /// and callback.
-    Timer() : id(-1) { }
-    /// Construct a timer which will repeat the callback every `interval` milliseconds until
-    /// the destructor of the timer is called.
-    ///
-    /// This is a convenience function and equivalent to calling
-    /// `start(slint::TimerMode::Repeated, interval, callback);` on a default constructed Timer.
-    template<std::invocable F>
-    Timer(std::chrono::milliseconds interval, F callback)
-        : id(cbindgen_private::slint_timer_start(
-                -1, TimerMode::Repeated, interval.count(),
-                [](void *data) { (*reinterpret_cast<F *>(data))(); }, new F(std::move(callback)),
-                [](void *data) { delete reinterpret_cast<F *>(data); }))
-    {
-    }
-    Timer(const Timer &) = delete;
-    Timer &operator=(const Timer &) = delete;
-    ~Timer() { cbindgen_private::slint_timer_destroy(id); }
-
-    /// Starts the timer with the given \a mode and \a interval, in order for the \a callback to
-    /// called when the timer fires. If the timer has been started previously and not fired yet,
-    /// then it will be restarted.
-    template<std::invocable F>
-    void start(TimerMode mode, std::chrono::milliseconds interval, F callback)
-    {
-        id = cbindgen_private::slint_timer_start(
-                id, mode, interval.count(), [](void *data) { (*reinterpret_cast<F *>(data))(); },
-                new F(std::move(callback)), [](void *data) { delete reinterpret_cast<F *>(data); });
-    }
-    /// Stops the previously started timer. Does nothing if the timer has never been started. A
-    /// stopped timer cannot be restarted with restart(). Use start() instead.
-    void stop() { cbindgen_private::slint_timer_stop(id); }
-    /// Restarts the timer. If the timer was previously started by calling [`Self::start()`]
-    /// with a duration and callback, then the time when the callback will be next invoked
-    /// is re-calculated to be in the specified duration relative to when this function is called.
-    ///
-    /// Does nothing if the timer was never started.
-    void restart() { cbindgen_private::slint_timer_restart(id); }
-    /// Returns true if the timer is running; false otherwise.
-    bool running() const { return cbindgen_private::slint_timer_running(id); }
-
-    /// Call the callback after the given duration.
-    template<std::invocable F>
-    static void single_shot(std::chrono::milliseconds duration, F callback)
-    {
-        cbindgen_private::slint_timer_singleshot(
-                duration.count(), [](void *data) { (*reinterpret_cast<F *>(data))(); },
-                new F(std::move(callback)), [](void *data) { delete reinterpret_cast<F *>(data); });
-    }
-
-private:
-    int64_t id;
-};
-
 namespace cbindgen_private {
 inline LayoutInfo LayoutInfo::merge(const LayoutInfo &other) const
 {
@@ -714,16 +197,25 @@ inline LayoutInfo LayoutInfo::merge(const LayoutInfo &other) const
                         std::max(preferred, other.preferred),
                         std::min(stretch, other.stretch) };
 }
+inline bool operator==(const EasingCurve &a, const EasingCurve &b)
+{
+    if (a.tag != b.tag) {
+        return false;
+    } else if (a.tag == EasingCurve::Tag::CubicBezier) {
+        return std::equal(a.cubic_bezier._0, a.cubic_bezier._0 + 4, b.cubic_bezier._0);
+    }
+    return true;
+}
 }
 
 namespace private_api {
 
-inline static void register_component(const vtable::VRc<ComponentVTable> *c,
+inline static void register_item_tree(const vtable::VRc<ItemTreeVTable> *c,
                                       const std::optional<slint::Window> &maybe_window)
 {
     const cbindgen_private::WindowAdapterRcOpaque *window_ptr =
             maybe_window.has_value() ? &maybe_window->window_handle().handle() : nullptr;
-    cbindgen_private::slint_register_component(c, window_ptr);
+    cbindgen_private::slint_register_item_tree(c, window_ptr);
 }
 
 inline SharedVector<float> solve_box_layout(const cbindgen_private::BoxLayoutData &data,
@@ -784,12 +276,25 @@ struct ModelChangeListener
 using ModelPeer = std::weak_ptr<ModelChangeListener>;
 
 template<typename M>
-auto access_array_index(const M &model, size_t index)
+auto access_array_index(const std::shared_ptr<M> &model, size_t index)
 {
-    if (const auto v = model->row_data_tracked(index)) {
+    if (!model) {
+        return decltype(*model->row_data_tracked(index)) {};
+    } else if (const auto v = model->row_data_tracked(index)) {
         return *v;
     } else {
         return decltype(*v) {};
+    }
+}
+
+template<typename M>
+long int model_length(const std::shared_ptr<M> &model)
+{
+    if (!model) {
+        return 0;
+    } else {
+        model->track_row_count_changes();
+        return model->row_count();
     }
 }
 
@@ -823,7 +328,7 @@ public:
     /// If the model can update the data, it should also call `row_changed`
     virtual void set_row_data(size_t, const ModelData &)
     {
-#ifdef SLINT_FEATURE_STD
+#ifndef SLINT_FEATURE_FREESTANDING
         std::cerr << "Model::set_row_data was called on a read-only model" << std::endl;
 #endif
     };
@@ -949,6 +454,15 @@ public:
     }
 };
 
+// Specialize for the empty array. We can't have a Model<void>, but `int` will work for our purpose
+template<>
+class ArrayModel<0, void> : public Model<int>
+{
+public:
+    size_t row_count() const override { return 0; }
+    std::optional<int> row_data(size_t) const override { return {}; }
+};
+
 /// Model to be used when we just want to repeat without data.
 struct UIntModel : Model<int>
 {
@@ -1012,6 +526,22 @@ public:
     {
         data.insert(data.begin() + index, value);
         this->row_added(index, 1);
+    }
+
+    /// Erases all rows from the VectorModel.
+    void clear()
+    {
+        if (!data.empty()) {
+            data.clear();
+            this->reset();
+        }
+    }
+
+    /// Replaces the underlying VectorModel's vector with \a array.
+    void set_vector(std::vector<ModelData> array)
+    {
+        data = std::move(array);
+        this->reset();
     }
 };
 
@@ -1454,11 +984,7 @@ struct ReverseModelInner : private_api::ModelChangeListener
 
     void row_removed(size_t first_removed_row, size_t count) override
     {
-        auto row_count = source_model->row_count();
-        auto old_row_count = row_count + count;
-        auto row = old_row_count - first_removed_row - 1;
-
-        target_model.row_removed(row, count);
+        target_model.row_removed(source_model->row_count() - first_removed_row, count);
     }
 
     void reset() override { source_model.reset(); }
@@ -1516,24 +1042,34 @@ class Repeater
     struct RepeaterInner : ModelChangeListener
     {
         enum class State { Clean, Dirty };
-        struct ComponentWithState
+        struct RepeatedInstanceWithState
         {
             State state = State::Dirty;
             std::optional<ComponentHandle<C>> ptr;
         };
-        std::vector<ComponentWithState> data;
+        std::vector<RepeatedInstanceWithState> data;
         private_api::Property<bool> is_dirty { true };
+        std::shared_ptr<Model<ModelData>> model;
 
         void row_added(size_t index, size_t count) override
         {
             is_dirty.set(true);
             data.resize(data.size() + count);
             std::rotate(data.begin() + index, data.end() - count, data.end());
+            for (std::size_t i = index; i < data.size(); ++i) {
+                // all the indexes are dirty
+                data[i].state = State::Dirty;
+            }
         }
         void row_changed(size_t index) override
         {
-            is_dirty.set(true);
-            data[index].state = State::Dirty;
+            auto &c = data[index];
+            if (model && c.ptr) {
+                (*c.ptr)->update_data(index, *model->row_data(index));
+                c.state = State::Clean;
+            } else {
+                c.state = State::Dirty;
+            }
         }
         void row_removed(size_t index, size_t count) override
         {
@@ -1565,15 +1101,9 @@ public:
     void ensure_updated(const Parent *parent) const
     {
         if (model.is_dirty()) {
-            auto preserved_data = inner ? std::make_optional(std::move(inner->data)) : std::nullopt;
             inner = std::make_shared<RepeaterInner>();
-            if (auto data = preserved_data) {
-                inner->data = std::move(*data);
-                for (auto &&compo_with_state : inner->data) {
-                    compo_with_state.state = RepeaterInner::State::Dirty;
-                }
-            }
             if (auto m = model.get()) {
+                inner->model = m;
                 m->attach_peer(inner);
             }
         }
@@ -1634,16 +1164,19 @@ public:
         return std::numeric_limits<uint64_t>::max();
     }
 
-    vtable::VRef<private_api::ComponentVTable> item_at(int i) const
+    vtable::VRef<private_api::ItemTreeVTable> item_at(int i) const
     {
         const auto &x = inner->data.at(i);
         return { &C::static_vtable, const_cast<C *>(&(**x.ptr)) };
     }
 
-    vtable::VWeak<private_api::ComponentVTable> component_at(int i) const
+    vtable::VWeak<private_api::ItemTreeVTable> instance_at(std::size_t i) const
     {
+        if (i >= inner->data.size()) {
+            return {};
+        }
         const auto &x = inner->data.at(i);
-        return vtable::VWeak<private_api::ComponentVTable> { x.ptr->into_dyn() };
+        return vtable::VWeak<private_api::ItemTreeVTable> { x.ptr->into_dyn() };
     }
 
     private_api::IndexRange index_range() const
@@ -1672,12 +1205,6 @@ public:
         if (auto m = model.get()) {
             if (row < m->row_count()) {
                 m->set_row_data(row, data);
-                if (inner && inner->is_dirty.get()) {
-                    auto &c = inner->data[row];
-                    if (c.state == RepeaterInner::State::Dirty && c.ptr) {
-                        (*c.ptr)->update_data(row, *m->row_data(row));
-                    }
-                }
             }
         }
     }
@@ -1714,6 +1241,16 @@ cbindgen_private::NativeStyleMetrics::~NativeStyleMetrics()
 {
     slint_native_style_metrics_deinit(this);
 }
+
+cbindgen_private::NativePalette::NativePalette(void *)
+{
+    slint_native_palette_init(this);
+}
+
+cbindgen_private::NativePalette::~NativePalette()
+{
+    slint_native_palette_deinit(this);
+}
 #endif // !defined(DOXYGEN)
 
 namespace private_api {
@@ -1724,13 +1261,29 @@ struct [[deprecated]] VersionCheckHelper
 };
 }
 
+/// Enum for the event loop mode parameter of the slint::run_event_loop() function.
+/// It is used to determine when the event loop quits.
+enum class EventLoopMode {
+    /// The event loop will quit when the last window is closed
+    /// or when slint::quit_event_loop() is called.
+    QuitOnLastWindowClosed,
+
+    /// The event loop will keep running until slint::quit_event_loop() is called,
+    /// even when all windows are closed.
+    RunUntilQuit
+};
+
 /// Enters the main event loop. This is necessary in order to receive
 /// events from the windowing system in order to render to the screen
 /// and react to user input.
-inline void run_event_loop()
+///
+/// The mode parameter determines the behavior of the event loop when all windows are closed.
+/// By default, it is set to QuitOnLastWindowClose, which means the event loop will
+/// quit when the last window is closed.
+inline void run_event_loop(EventLoopMode mode = EventLoopMode::QuitOnLastWindowClosed)
 {
     private_api::assert_main_thread();
-    cbindgen_private::slint_run_event_loop();
+    cbindgen_private::slint_run_event_loop(mode == EventLoopMode::QuitOnLastWindowClosed);
 }
 
 /// Schedules the main event loop for termination. This function is meant
@@ -1787,7 +1340,7 @@ void invoke_from_event_loop(Functor f)
             [](void *data) { delete reinterpret_cast<Functor *>(data); });
 }
 
-#ifdef SLINT_FEATURE_STD
+#ifndef SLINT_FEATURE_FREESTANDING
 
 /// Blocking version of invoke_from_event_loop()
 ///

@@ -424,7 +424,8 @@ impl FontCache {
         target_family = "windows",
         target_os = "macos",
         target_os = "ios",
-        target_arch = "wasm32"
+        target_arch = "wasm32",
+        target_os = "android",
     )))]
     fn font_fallbacks_for_request(
         &self,
@@ -444,7 +445,7 @@ impl FontCache {
         })
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", target_os = "android"))]
     fn font_fallbacks_for_request(
         &self,
         _family: Option<&SharedString>,
@@ -572,12 +573,23 @@ pub(crate) fn layout_text_lines(
             font_height
         } else {
             // Note: this is kind of doing twice the layout because text_size also does it
-            font.text_size(
-                PhysicalLength::new(paint.letter_spacing()),
-                string,
-                if wrap { Some(max_width) } else { None },
-            )
-            .height_length()
+            let text_height = font
+                .text_size(
+                    PhysicalLength::new(paint.letter_spacing()),
+                    string,
+                    if wrap { Some(max_width) } else { None },
+                )
+                .height_length();
+            if elide && text_height > max_height {
+                // The height of the text is used for vertical alignment below.
+                // If the full text doesn't fit into max_height and eliding is
+                // enabled, calculate the height of the max number of lines that
+                // fit to ensure correct vertical alignment when elided.
+                let max_lines = (max_height.get() / font_height.get()).floor();
+                font_height * max_lines
+            } else {
+                text_height
+            }
         }
     };
 
@@ -654,7 +666,7 @@ pub(crate) fn layout_text_lines(
                     }
                 }
                 if elide_last_line {
-                    let elided = format!("{}…", line);
+                    let elided = format!("{}…", line.strip_suffix('\n').unwrap_or(line));
                     process_line(&elided, y, start, &text_metrics);
                     y += font_height;
                     start = index;

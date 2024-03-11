@@ -1,4 +1,10 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT OR Apache-2.0 -->
+
 # Changelog
+
+## [0.1.4] - 2024-02-20
+
+ - Warning fixes
 
 ## [0.1.3] - 2023-04-03
 

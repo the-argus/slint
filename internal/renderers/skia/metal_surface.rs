@@ -81,7 +81,8 @@ impl super::Surface for MetalSurface {
     fn render(
         &self,
         _size: PhysicalWindowSize,
-        callback: &dyn Fn(&mut skia_safe::Canvas, &mut skia_safe::gpu::DirectContext),
+        callback: &dyn Fn(&skia_safe::Canvas, Option<&mut skia_safe::gpu::DirectContext>),
+        pre_present_callback: &RefCell<Option<Box<dyn FnMut()>>>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
         autoreleasepool(|| {
             let drawable = match self.layer.next_drawable() {
@@ -104,7 +105,6 @@ impl super::Surface for MetalSurface {
 
                 let backend_render_target = skia_safe::gpu::BackendRenderTarget::new_metal(
                     (size.width as i32, size.height as i32),
-                    1,
                     &texture_info,
                 );
 
@@ -119,11 +119,15 @@ impl super::Surface for MetalSurface {
                 .unwrap()
             };
 
-            callback(surface.canvas(), gr_context);
+            callback(surface.canvas(), Some(gr_context));
 
             drop(surface);
 
             gr_context.submit(None);
+
+            if let Some(pre_present_callback) = pre_present_callback.borrow_mut().as_mut() {
+                pre_present_callback();
+            }
 
             let command_buffer = self.command_queue.new_command_buffer();
             command_buffer.present_drawable(drawable);

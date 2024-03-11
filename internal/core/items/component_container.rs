@@ -7,21 +7,22 @@ This module contains the builtin `ComponentContainer` and related items
 When adding an item or a property, it needs to be kept in sync with different place.
 Lookup the [`crate::items`] module documentation.
 */
-use super::{Item, ItemConsts, ItemRc, RenderingResult};
-use crate::component::{ComponentRc, ComponentWeak, IndexRange};
-use crate::component_factory::ComponentFactory;
+use super::{Item, ItemConsts, ItemRc, Rectangle, RenderingResult};
+use crate::component_factory::{ComponentFactory, FactoryContext};
 use crate::input::{
     FocusEvent, FocusEventResult, InputEventFilterResult, InputEventResult, KeyEvent,
     KeyEventResult, MouseEvent,
 };
 use crate::item_rendering::CachedRenderingData;
+use crate::item_tree::{IndexRange, ItemTreeRc, ItemTreeWeak, ItemWeak};
 use crate::item_tree::{ItemTreeNode, ItemVisitorVTable, TraversalOrder, VisitChildrenResult};
 use crate::layout::{LayoutInfo, Orientation};
-use crate::lengths::{LogicalLength, LogicalPoint, LogicalRect, LogicalSize};
+use crate::lengths::{LogicalLength, LogicalSize};
 use crate::properties::{Property, PropertyTracker};
 #[cfg(feature = "rtti")]
 use crate::rtti::*;
 use crate::window::WindowAdapter;
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use const_field_offset::FieldOffsets;
@@ -30,37 +31,24 @@ use core::pin::Pin;
 use i_slint_core_macros::*;
 use once_cell::unsync::OnceCell;
 
-fn limit_to_constraints(input: LogicalLength, constraint: LayoutInfo) -> LogicalLength {
-    let input = input.get();
-    LogicalLength::new(if input < constraint.min {
-        constraint.min
-    } else if input > constraint.max {
-        constraint.max
-    } else if input >= constraint.min && input <= constraint.max {
-        input
-    } else {
-        constraint.preferred
-    })
-}
-
 #[repr(C)]
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 /// The implementation of the `ComponentContainer` element
 pub struct ComponentContainer {
-    pub component_factory: Property<ComponentFactory>,
-
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
     pub width: Property<LogicalLength>,
     pub height: Property<LogicalLength>,
+    pub component_factory: Property<ComponentFactory>,
+    pub has_component: Property<bool>,
+
     pub cached_rendering_data: CachedRenderingData,
 
     component_tracker: OnceCell<Pin<Box<PropertyTracker>>>,
-    component: RefCell<Option<ComponentRc>>,
+    item_tree: RefCell<Option<ItemTreeRc>>,
 
-    my_component: OnceCell<ComponentWeak>,
-    embedding_item_tree_index: OnceCell<usize>,
+    my_component: OnceCell<ItemTreeWeak>,
+    embedding_item_tree_index: OnceCell<u32>,
+    self_weak: OnceCell<ItemWeak>,
 }
 
 impl ComponentContainer {
@@ -73,75 +61,82 @@ impl ComponentContainer {
             .evaluate_if_dirty(|| self.component_factory());
 
         let Some(factory) = factory else {
-            // nothing changed!
             return;
         };
 
-        let product = factory.build().and_then(|rc| {
-            vtable::VRc::borrow_pin(&rc)
-                .as_ref()
-                .embed_component(
-                    self.my_component.get().unwrap(),
-                    *self.embedding_item_tree_index.get().unwrap(),
-                )
-                .then_some(rc)
-        });
+        let mut window = None;
+        if let Some(parent) = self.my_component.get().and_then(|x| x.upgrade()) {
+            vtable::VRc::borrow_pin(&parent).as_ref().window_adapter(false, &mut window);
+        }
+        let prevent_focus_change =
+            window.as_ref().map_or(false, |w| w.window().0.prevent_focus_change.replace(true));
 
-        if let Some(rc) = &product {
-            // The change resulted in a new component to set up:
-            let component = vtable::VRc::borrow_pin(rc);
-            let root_item = component.as_ref().get_item_ref(0);
-            let window_item =
-                crate::items::ItemRef::downcast_pin::<crate::items::WindowItem>(root_item).unwrap();
+        let factory_context = FactoryContext {
+            parent_item_tree: self.my_component.get().unwrap().clone(),
+            parent_item_tree_index: *self.embedding_item_tree_index.get().unwrap(),
+        };
 
-            // Calculate new size for both myself and the embedded window:
-            let new_width = limit_to_constraints(
-                window_item.width(),
-                component.as_ref().layout_info(Orientation::Horizontal),
-            );
-            let new_height = limit_to_constraints(
-                window_item.height(),
-                component.as_ref().layout_info(Orientation::Vertical),
-            );
+        let product = factory.build(factory_context);
 
-            Property::link_two_way(
-                ComponentContainer::FIELD_OFFSETS.width.apply_pin(self),
-                super::WindowItem::FIELD_OFFSETS.width.apply_pin(window_item),
-            );
-            Property::link_two_way(
-                ComponentContainer::FIELD_OFFSETS.height.apply_pin(self),
-                super::WindowItem::FIELD_OFFSETS.height.apply_pin(window_item),
-            );
-
-            ComponentContainer::FIELD_OFFSETS.width.apply_pin(self).set(new_width);
-            ComponentContainer::FIELD_OFFSETS.height.apply_pin(self).set(new_height);
-        } else {
-            // There change resulted in no component to embed:
-            ComponentContainer::FIELD_OFFSETS.width.apply_pin(self).set(Default::default());
-            ComponentContainer::FIELD_OFFSETS.height.apply_pin(self).set(Default::default());
+        if let Some(w) = window {
+            w.window().0.prevent_focus_change.set(prevent_focus_change);
         }
 
-        self.component.replace(product);
+        if let Some(item_tree) = product.clone() {
+            let item_tree = vtable::VRc::borrow_pin(&item_tree);
+            let root_item = item_tree.as_ref().get_item_ref(0);
+            if let Some(window_item) =
+                crate::items::ItemRef::downcast_pin::<crate::items::WindowItem>(root_item)
+            {
+                // Do _not_ use a two-way binding: That causes evaluations of width and height to
+                // assert on recursive property evaluation.
+                let weak = self.self_weak.get().unwrap().clone();
+                window_item.width.set_binding(Box::new(move || {
+                    if let Some(self_rc) = weak.upgrade() {
+                        let self_pin = self_rc.borrow();
+                        if let Some(self_cc) = crate::items::ItemRef::downcast_pin::<Self>(self_pin)
+                        {
+                            return self_cc.width();
+                        }
+                    }
+                    Default::default()
+                }));
+                let weak = self.self_weak.get().unwrap().clone();
+                window_item.height.set_binding(Box::new(move || {
+                    if let Some(self_rc) = weak.upgrade() {
+                        let self_pin = self_rc.borrow();
+                        if let Some(self_cc) = crate::items::ItemRef::downcast_pin::<Self>(self_pin)
+                        {
+                            return self_cc.height();
+                        }
+                    }
+                    Default::default()
+                }));
+            }
+        }
+
+        self.has_component.set(product.is_some());
+
+        self.item_tree.replace(product);
     }
 
     pub fn subtree_range(self: Pin<&Self>) -> IndexRange {
-        IndexRange { start: 0, end: if self.component.borrow().is_some() { 1 } else { 0 } }
+        IndexRange { start: 0, end: if self.item_tree.borrow().is_some() { 1 } else { 0 } }
     }
 
-    pub fn subtree_component(self: Pin<&Self>) -> ComponentWeak {
-        let rc = self.component.borrow().clone();
-        vtable::VRc::downgrade(rc.as_ref().unwrap())
+    pub fn subtree_component(self: Pin<&Self>) -> ItemTreeWeak {
+        self.item_tree.borrow().as_ref().map_or(ItemTreeWeak::default(), vtable::VRc::downgrade)
     }
 
     pub fn visit_children_item(
         self: Pin<&Self>,
-        index: isize,
+        _index: isize,
         order: TraversalOrder,
         visitor: vtable::VRefMut<ItemVisitorVTable>,
     ) -> VisitChildrenResult {
-        let rc = self.component.borrow().clone();
+        let rc = self.item_tree.borrow().clone();
         if let Some(rc) = &rc {
-            vtable::VRc::borrow_pin(rc).as_ref().visit_children_item(index, order, visitor)
+            vtable::VRc::borrow_pin(rc).as_ref().visit_children_item(-1, order, visitor)
         } else {
             VisitChildrenResult::CONTINUE
         }
@@ -150,7 +145,7 @@ impl ComponentContainer {
 
 impl Item for ComponentContainer {
     fn init(self: Pin<&Self>, self_rc: &ItemRc) {
-        let rc = self_rc.component();
+        let rc = self_rc.item_tree();
 
         self.my_component.set(vtable::VRc::downgrade(rc)).ok().unwrap();
 
@@ -158,22 +153,15 @@ impl Item for ComponentContainer {
         let pin_rc = vtable::VRc::borrow_pin(rc);
         let item_tree = pin_rc.as_ref().get_item_tree();
         let ItemTreeNode::Item { children_index: child_item_tree_index, .. } =
-            item_tree[self_rc.index()]
+            item_tree[self_rc.index() as usize]
         else {
             panic!("Internal compiler error: ComponentContainer had no child.");
         };
 
-        self.embedding_item_tree_index.set(child_item_tree_index as usize).ok().unwrap();
+        self.embedding_item_tree_index.set(child_item_tree_index).ok().unwrap();
 
         self.component_tracker.set(Box::pin(PropertyTracker::default())).ok().unwrap();
-    }
-
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        // Our geometry is fine since our width/height are bound to the component!
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
+        self.self_weak.set(self_rc.downgrade()).ok().unwrap();
     }
 
     fn layout_info(
@@ -182,7 +170,7 @@ impl Item for ComponentContainer {
         _window_adapter: &Rc<dyn WindowAdapter>,
     ) -> LayoutInfo {
         self.ensure_updated();
-        if let Some(rc) = self.component.borrow().clone() {
+        if let Some(rc) = self.item_tree.borrow().clone() {
             vtable::VRc::borrow_pin(&rc).as_ref().layout_info(orientation)
         } else {
             Default::default()
@@ -227,10 +215,22 @@ impl Item for ComponentContainer {
 
     fn render(
         self: Pin<&Self>,
-        _backend: &mut super::ItemRendererRef,
-        _item_rc: &ItemRc,
-        _size: LogicalSize,
+        backend: &mut super::ItemRendererRef,
+        item_rc: &ItemRc,
+        size: LogicalSize,
     ) -> RenderingResult {
+        if let Some(item_tree) = self.item_tree.borrow().clone() {
+            let item_tree = vtable::VRc::borrow_pin(&item_tree);
+            let root_item = item_tree.as_ref().get_item_ref(0);
+            if let Some(window_item) =
+                crate::items::ItemRef::downcast_pin::<crate::items::WindowItem>(root_item)
+            {
+                let mut rect = Rectangle::default();
+                rect.background.set(window_item.background());
+                backend.draw_rectangle(core::pin::pin!(rect).as_ref(), item_rc, size);
+            }
+        }
+
         RenderingResult::ContinueRenderingChildren
     }
 }

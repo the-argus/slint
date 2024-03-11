@@ -21,10 +21,6 @@
  */
 
 component Empty {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     //-is_internal
 }
 
@@ -33,16 +29,25 @@ component Rectangle inherits Empty {
     in property <brush> color <=> background;
 }
 
-component BorderRectangle inherits Rectangle {
+component BasicBorderRectangle inherits Rectangle {
     in property <length> border-width;
     in property <length> border-radius;
     in property <brush> border-color;
+}
+
+component BorderRectangle inherits BasicBorderRectangle {
+    in property <length> border-top-left-radius;
+    in property <length> border-top-right-radius;
+    in property <length> border-bottom-left-radius;
+    in property <length> border-bottom-right-radius;
     //-default_size_binding:expands_to_parent_geometry
 }
 
 export { BorderRectangle as Rectangle }
 
 component ImageItem inherits Empty {
+    in property <length> width;
+    in property <length> height;
     in property <image> source;
     in property <ImageFit> image-fit;
     in property <ImageRendering> image-rendering;
@@ -55,14 +60,24 @@ export component ClippedImage inherits ImageItem {
     in property <int> source-clip-width;
     in property <int> source-clip-height;
     //-default_size_binding:implicit_size
+
+    in property <ImageHorizontalAlignment> horizontal-alignment;
+    in property <ImageVerticalAlignment> vertical-alignment;
+    in property <ImageTiling> horizontal-tiling;
+    in property <ImageTiling> vertical-tiling;
+    // TODO: sets both horizontal-tiling and vertical-tiling at the same time.
+    // in property <ImageTiling> tiling;
+
 }
 
 export { ClippedImage as Image }
 
 export component ComponentContainer inherits Empty {
     in property <component-factory> component-factory;
+    out property <bool> has-component;
 
-    //-default_size_binding:expands_to_parent_geometry
+    in-out property <length> width;
+    in-out property <length> height;
 }
 
 export component Rotate inherits Empty {
@@ -74,6 +89,8 @@ export component Rotate inherits Empty {
 }
 
 export component Text inherits Empty {
+    in property <length> width;
+    in property <length> height;
     in property <string> text;
     in property <string> font-family;
     in property <length> font-size;
@@ -89,10 +106,6 @@ export component Text inherits Empty {
 }
 
 export component TouchArea {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <bool> enabled: true;
     out property <bool> pressed;
     out property <bool> has_hover;
@@ -102,32 +115,30 @@ export component TouchArea {
     out property <length> pressed_y;
     in property <MouseCursor> mouse-cursor;
     callback clicked;
+    callback double-clicked;
     callback moved;
     callback pointer-event(PointerEvent);
+    callback scroll-event(PointerScrollEvent) -> EventResult;
     //-default_size_binding:expands_to_parent_geometry
 }
 
 export component FocusScope {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <bool> enabled: true;
     out property <bool> has-focus;
     callback key_pressed(KeyEvent) -> EventResult;
     callback key_released(KeyEvent) -> EventResult;
+    callback focus_changed_event();
     //-default_size_binding:expands_to_parent_geometry
     //-accepts_focus
 }
 
 export component Flickable inherits Empty {
-                // These properties are actually going to be forwarded to the viewport by the
-                // code generator
     in property <length> viewport-height;
     in property <length> viewport-width;
     in-out property <length> viewport-x;
     in-out property <length> viewport-y;
     in property <bool> interactive: true;
+    callback flicked();
     //-default_size_binding:expands_to_parent_geometry
 }
 
@@ -170,8 +181,6 @@ export component TextInput {
     in property <TextVerticalAlignment> vertical-alignment;
     in property <TextWrap> wrap;
     in property <length> letter-spacing;
-    in property <length> x;
-    in property <length> y;
     in property <length> width;
     in property <length> height;
     in property <length> text-cursor-width; // StyleMetrics.text-cursor-width  set in apply_default_properties_from_style
@@ -191,6 +200,7 @@ export component TextInput {
     out property <string> preedit-text;
     //-default_size_binding:expands_to_parent_geometry
     //-accepts_focus
+    function set-selection-offsets(start: int, end: int) {}
     function select-all() {}
     function clear-selection() {}
     function cut() {}
@@ -199,11 +209,11 @@ export component TextInput {
 }
 
 export component Clip {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <length> border-radius;
+    in property <length> border-top-left-radius;
+    in property <length> border-top-right-radius;
+    in property <length> border-bottom-left-radius;
+    in property <length> border-bottom-right-radius;
     in property <length> border-width;
     in property <bool> clip;
     //-default_size_binding:expands_to_parent_geometry
@@ -211,10 +221,6 @@ export component Clip {
 }
 
 export component Opacity {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <float> opacity: 1;
     //-default_size_binding:expands_to_parent_geometry
     //-is_internal
@@ -232,6 +238,8 @@ component Row {
 
 // Note: layouts are not NativeClass, but this is lowered in lower_layout
 export component GridLayout {
+    in property <length> spacing-horizontal;
+    in property <length> spacing-vertical;
     in property <length> spacing;
 
     // Additional accepted child
@@ -312,10 +320,6 @@ component Close {
 }
 
 export component Path {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <brush> fill;
     in property <FillRule> fill-rule;
     in property <brush> stroke;
@@ -344,11 +348,6 @@ component Tab {
 
 // Note: not a native class, handled in the lower_tabs pass
 export component TabWidget {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
-
     in-out property <int> current-index;
 
     //-disallow_global_types_as_child_elements
@@ -367,7 +366,7 @@ export component PopupWindow {
     in property <length> anchor_y;
     in property <length> anchor_height;
     in property <length> anchor_width;*/
-    in property <bool> close-on-click: true;
+    in property <bool> close-on-click: true;  // constexpr hardcoded in typeregister.rs
     //show() is hardcoded in typeregister.rs
 }
 
@@ -386,10 +385,6 @@ export global TextInputInterface {
 }
 
 export component NativeButton {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <string> text;
     in property <image> icon;
     out property <bool> pressed;
@@ -397,31 +392,26 @@ export component NativeButton {
     in-out property <bool> checked;
     out property <bool> has-focus;
     in property <bool> primary;
+    in property <bool> colorize-icon;
     callback clicked;
     in property <bool> enabled: true;
     in property <StandardButtonKind> standard-button-kind;
     in property <bool> is-standard-button;
     //-is_internal
+    //-accepts_focus
 }
 
 export component NativeCheckBox {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <bool> enabled: true;
     in property <string> text;
     in-out property <bool> checked;
     out property <bool> has-focus;
     callback toggled;
     //-is_internal
+    //-accepts_focus
 }
 
 export component NativeSpinBox {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <bool> enabled: true;
     out property <bool> has-focus;
     in-out property <int> value;
@@ -429,36 +419,26 @@ export component NativeSpinBox {
     in property <int> maximum: 100;
     callback edited(int /* value */);
     //-is_internal
+    //-accepts_focus
 }
 
 export component NativeSlider {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <bool> enabled: true;
     in-out property <float> value;
     in property <float> minimum;
     in property <float> maximum: 100;
+    in property <Orientation> orientation: Orientation.horizontal;
     callback changed(float);
     //-is_internal
 }
 
 export component NativeProgressIndicator {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <bool> indeterminate;
     in property <float> progress;
     //-is_internal
 }
 
 export component NativeGroupBox {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <bool> enabled: true;
     in property <string> title;
     out property <length> native-padding-left;
@@ -470,10 +450,6 @@ export component NativeGroupBox {
 }
 
 export component NativeLineEdit {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     out property <length> native-padding-left;
     out property <length> native-padding-right;
     out property <length> native-padding-top;
@@ -484,10 +460,6 @@ export component NativeLineEdit {
 }
 
 export component NativeScrollView {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <length> horizontal-max;
     in property <length> horizontal-page-size;
     in property <length> horizontal-value;
@@ -505,23 +477,19 @@ export component NativeScrollView {
 }
 
 export component NativeStandardListViewItem {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <int> index;
     in property <StandardListViewItem> item;
     in-out property <bool> is_selected;
     in property <bool> has_hover;
+    in property <bool> has_focus;
+    in property <bool> pressed;
     in property <bool> combobox;
+    in property <length> pressed-x;
+    in property <length> pressed-y;
     //-is_internal
 }
 
 export component NativeTableHeaderSection {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in property <int> index;
     in property <TableColumn> item;
     in property <bool> has_hover;
@@ -529,26 +497,16 @@ export component NativeTableHeaderSection {
 }
 
 export component NativeComboBox {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     in-out property <string> current_value;
     in property <bool> enabled: true;
     //-is_internal
 }
 
 export component NativeComboBoxPopup {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
     //-is_internal
 }
 
 export component NativeTabWidget {
-    in property <length> x;
-    in property <length> y;
     in property <length> width;
     in property <length> height;
 
@@ -572,11 +530,6 @@ export component NativeTabWidget {
 }
 
 export component NativeTab {
-    in property <length> x;
-    in property <length> y;
-    in property <length> width;
-    in property <length> height;
-
     in property<string> title;
     in property<image> icon;
     in property<bool> enabled : true;
@@ -607,6 +560,23 @@ export global NativeStyleMetrics {
 
     // Tab Bar metrics:
     out property <LayoutAlignment> tab-bar-alignment;
+
+    //-is_non_item_type
+    //-is_internal
+}
+
+export global NativePalette {
+    out property <brush> background;
+    out property <brush> foreground;
+    out property <brush> alternate-background;
+    out property <brush> alternate-foreground;
+    out property <brush> control-background;
+    out property <brush> control-foreground;
+    out property <brush> accent-background;
+    out property <brush> accent-foreground;
+    out property <brush> selection-background;
+    out property <brush> selection-foreground;
+    out property <brush> border;
 
     //-is_non_item_type
     //-is_internal

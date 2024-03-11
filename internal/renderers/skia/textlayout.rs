@@ -6,9 +6,10 @@ use std::collections::HashMap;
 
 use i_slint_core::graphics::euclid::num::Zero;
 use i_slint_core::graphics::FontRequest;
-use i_slint_core::items::TextVerticalAlignment;
+use i_slint_core::items::{TextHorizontalAlignment, TextVerticalAlignment};
 use i_slint_core::lengths::{LogicalLength, ScaleFactor};
 use i_slint_core::{items, Color};
+use skia_safe::FontMgr;
 
 use super::itemrenderer::to_skia_color;
 use super::{PhysicalLength, PhysicalPoint, PhysicalRect, PhysicalSize};
@@ -33,6 +34,7 @@ thread_local! {
         let font_mgr = skia_safe::FontMgr::new();
         let type_face_font_provider = skia_safe::textlayout::TypefaceFontProvider::new();
         let mut font_collection = skia_safe::textlayout::FontCollection::new();
+        font_collection.set_default_font_manager(FontMgr::new(), None);
         // FontCollection first looks up in the dynamic font manager and then the asset font manager. If the
         // family is empty, the default font manager will match against the system default. We want that behavior,
         // and only if the family is not present in the system, then we want to fall back to the assert font manager
@@ -59,6 +61,7 @@ pub fn create_layout(
     max_height: PhysicalLength,
     h_align: items::TextHorizontalAlignment,
     v_align: TextVerticalAlignment,
+    wrap: items::TextWrap,
     overflow: items::TextOverflow,
     selection: Option<&Selection>,
 ) -> (skia_safe::textlayout::Paragraph, PhysicalPoint) {
@@ -88,6 +91,11 @@ pub fn create_layout(
 
     if overflow == items::TextOverflow::Elide {
         style.set_ellipsis("…");
+        if wrap == items::TextWrap::WordWrap {
+            let metrics = text_style.font_metrics();
+            let line_height = metrics.descent - metrics.ascent + metrics.leading;
+            style.set_max_lines((max_height.get() / line_height).floor() as usize);
+        }
     }
 
     style.set_text_align(match h_align {
@@ -200,12 +208,37 @@ pub fn cursor_rect(
     cursor_pos: usize,
     layout: skia_safe::textlayout::Paragraph,
     cursor_width: PhysicalLength,
+    h_align: TextHorizontalAlignment,
 ) -> PhysicalRect {
     if string.is_empty() {
+        let x = match h_align {
+            TextHorizontalAlignment::Left => PhysicalLength::default(),
+            TextHorizontalAlignment::Center => PhysicalLength::new(layout.max_width() / 2.),
+            TextHorizontalAlignment::Right => PhysicalLength::new(layout.max_width()),
+        };
         return PhysicalRect::new(
-            PhysicalPoint::default(),
+            PhysicalPoint::from_lengths(x, PhysicalLength::default()),
             PhysicalSize::from_lengths(cursor_width, PhysicalLength::new(layout.height())),
         );
+    }
+
+    // SkParagraph::getRectsForRange() does not report the text box of a trailing newline
+    // correctly. Use the last line's metrics to get the correct coordinates (#3590).
+    if cursor_pos == string.len()
+        && string.ends_with(|ch| ch == '\n' || ch == '\u{2028}' || ch == '\u{2029}')
+    {
+        if let Some(metrics) = layout.get_line_metrics_at(layout.line_number() - 1) {
+            return PhysicalRect::new(
+                PhysicalPoint::new(
+                    (metrics.left + metrics.width) as f32,
+                    (metrics.baseline - metrics.ascent) as f32,
+                ),
+                PhysicalSize::from_lengths(
+                    cursor_width,
+                    PhysicalLength::new(metrics.height as f32),
+                ),
+            );
+        }
     }
 
     // The cursor is visually between characters, but the logical cursor_pos refers to the

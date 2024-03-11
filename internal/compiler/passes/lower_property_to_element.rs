@@ -4,14 +4,12 @@
 //! Pass that lowers synthetic properties such as `opacity` and `layer` properties to their corresponding elements.
 //! For example `f := Foo { opacity: <some float>; }` is mapped to `Opacity { opacity <=> f.opacity; f := Foo { ... } }`
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use crate::diagnostics::BuildDiagnostics;
 use crate::expression_tree::{BindingExpression, Expression, NamedReference};
 use crate::langtype::Type;
 use crate::object_tree::{self, Component, Element, ElementRc};
 use crate::typeregister::TypeRegister;
+use std::rc::Rc;
 
 /// If any element in `component` declares a binding to `property_name`, then a new
 /// element of type `element_name` is created, injected as a parent to the element and bindings
@@ -54,7 +52,7 @@ pub(crate) fn lower_property_to_element(
                         .property_analysis
                         .borrow()
                         .get(property_name)
-                        .map_or(false, |a| a.is_set))
+                        .map_or(false, |a| a.is_set || a.is_linked))
         };
 
         for mut child in old_children {
@@ -121,5 +119,5 @@ fn create_property_element(
         bindings,
         ..Default::default()
     };
-    Rc::new(RefCell::new(element))
+    element.make_rc()
 }

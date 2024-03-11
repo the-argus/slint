@@ -11,6 +11,8 @@
      - Run in this directory:
          SLINT_STYLE=fluent wasm-pack build --release --out-dir pkg/fluent --target web
          SLINT_STYLE=material wasm-pack build --release --out-dir pkg/material --target web
+         SLINT_STYLE=cupertino wasm-pack build --release --out-dir pkg/cupertino --target web
+         SLINT_STYLE=cosmic wasm-pack build --release --out-dir pkg/cosmic --target web
   -->
 
 <head>
@@ -31,11 +33,13 @@
   </div>
   <p>Select style
     <select id="style-selection">
-      <option value="">fluent</option>
-      <option value="">material</option>
+      <option value="fluent">Fluent</option>
+      <option value="material">Material</option>
+      <option value="cupertino">Cupertino</option>
+      <option value="cosmic">Cosmic</option>
     </select>
   </p>
-  <div id="canvas-parent" width="640" height="480"></div>
+  <div id="canvas-parent"></div>
   <p class="links">
     <a href="https://github.com/slint-ui/slint/blob/master/examples/gallery/gallery.slint">
       View Source Code on GitHub</a> -
@@ -44,48 +48,71 @@
     </a>
   </p>
   <script type="module">
-    const fluent = "./pkg/fluent/gallery.js";
-    const material = "./pkg/material/gallery.js";
+    var galleries = [];
+    var currentGallery = undefined;
 
     function initGallery(gallery) {
       document.getElementById("spinner").hidden = false;
 
-      let canvas = document.getElementById("canvas");
+      if (currentGallery !== undefined) {
+        let currentGalleryCanvas = document.getElementById("canvas");
 
-      // remove old canvas and unload window
-      if (canvas != undefined) {
-        canvas.remove();
+        // remove old canvas and unload window
+        if (currentGalleryCanvas != undefined) {
+          document.getElementById("canvas-parent").removeChild(currentGalleryCanvas);
+        }
       }
 
-      import(gallery).then(module => {
-        let canvas = document.createElement("canvas");
-        canvas.id = "canvas";
+      if (galleries[gallery] !== undefined) {
+        document.getElementById("canvas-parent").appendChild(galleries[gallery]);
+        document.getElementById("spinner").hidden = true;
+      } else {
+        import(gallery).then(module => {
+          let canvas = document.createElement("canvas");
+          canvas.id = "canvas";
+          canvas.dataset.slintAutoResizeToPreferred = "true";
+          currentGallery = gallery;
+          galleries[gallery] = canvas;
 
-        document.getElementById("canvas-parent").appendChild(canvas);
-        module.default().finally(() => {
-          document.getElementById("canvas").hidden = false;
-          document.getElementById("spinner").hidden = true;
-        });
-      })
+          document.getElementById("canvas-parent").appendChild(canvas);
+          module.default().finally(() => {
+            document.getElementById("canvas").hidden = false;
+            document.getElementById("spinner").hidden = true;
+          });
+        })
+      }
     }
 
-    initGallery(fluent);
-
     var styleSelection = document.getElementById("style-selection");
-    styleSelection.onchange = function (ev) {
-      var selectedStyle = styleSelection[styleSelection.selectedIndex].innerText;
 
-      switch (selectedStyle) {
-        case "fluent":
-          initGallery(fluent);
-          break;
-        case "material":
-          initGallery(material);
-          break;
-        default:
-          break;
+    function loadGallery() {
+      var selectedStyle = ".\/pkg\/" + styleSelection[styleSelection.selectedIndex].value + "\/gallery.js";
+      initGallery(selectedStyle);
+    }
+
+    styleSelection.onchange = loadGallery;
+
+    window.addEventListener('load', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const style = urlParams.get('style');
+      if (style) {
+        document.getElementById('style-selection').value = style.split(',')[0];
+      } else {
+        const userAgent = window.navigator.userAgent.toLowerCase();
+        let defaultStyle = '';
+        if (userAgent.indexOf('mac') !== -1 || userAgent.indexOf('iphone') !== -1 || userAgent.indexOf('ipad') !== -1) {
+          defaultStyle = 'cupertino';
+        } else if (userAgent.indexOf('windows') !== -1) {
+          defaultStyle = 'fluent';
+        } else if (userAgent.indexOf('android') !== -1) {
+          defaultStyle = 'material';
+        }
+        if (defaultStyle) {
+          document.getElementById('style-selection').value = defaultStyle;
+        }
       }
-    };
+      loadGallery();
+    }, false);
   </script>
 </body>
 

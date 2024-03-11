@@ -10,6 +10,7 @@ but then it should also be renamed everywhere, including in the language grammar
 
 #![warn(missing_docs)]
 
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use core::cell::Cell;
 
@@ -39,6 +40,14 @@ impl<Arg: ?Sized, Ret: Default> Callback<Arg, Ret> {
             self.handler.set(Some(h));
         }
         r
+    }
+
+    /// Return whether a callback is registered or not.
+    pub fn has_handler(&self) -> bool {
+        let handler = self.handler.take();
+        let result = handler.is_some();
+        self.handler.set(handler);
+        result
     }
 
     /// Set an handler to be called when the callback is called

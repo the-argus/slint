@@ -40,6 +40,7 @@ pub enum BuiltinFunction {
     SetFocusItem,
     ShowPopupWindow,
     ClosePopupWindow,
+    SetSelectionOffsets,
     /// A function that belongs to an item (such as TextInput's select-all function).
     ItemMemberFunction(String),
     /// the "42".to_float()
@@ -76,6 +77,8 @@ pub enum BuiltinMacroFunction {
     Min,
     /// Transform `max(a, b, c, ..., z)` into  a series of conditional expression and comparisons
     Max,
+    /// Transforms `clamp(v, min, max)` into a series of min/max calls
+    Clamp,
     /// Add the right conversion operations so that the return type is the same as the argument type
     Mod,
     CubicBezier,
@@ -132,6 +135,10 @@ impl BuiltinFunction {
                     args: vec![Type::ElementReference],
                 }
             }
+            BuiltinFunction::SetSelectionOffsets => Type::Function {
+                return_type: Box::new(Type::Void),
+                args: vec![Type::ElementReference, Type::Int32, Type::Int32],
+            },
             BuiltinFunction::ItemMemberFunction(..) => Type::Function {
                 return_type: Box::new(Type::Void),
                 args: vec![Type::ElementReference],
@@ -246,6 +253,7 @@ impl BuiltinFunction {
             | BuiltinFunction::ATan => true,
             BuiltinFunction::SetFocusItem => false,
             BuiltinFunction::ShowPopupWindow | BuiltinFunction::ClosePopupWindow => false,
+            BuiltinFunction::SetSelectionOffsets => false,
             BuiltinFunction::ItemMemberFunction(..) => false,
             BuiltinFunction::StringToFloat | BuiltinFunction::StringIsFloat => true,
             BuiltinFunction::ColorBrighter
@@ -299,6 +307,7 @@ impl BuiltinFunction {
             | BuiltinFunction::ATan => true,
             BuiltinFunction::SetFocusItem => false,
             BuiltinFunction::ShowPopupWindow | BuiltinFunction::ClosePopupWindow => false,
+            BuiltinFunction::SetSelectionOffsets => false,
             BuiltinFunction::ItemMemberFunction(..) => false,
             BuiltinFunction::StringToFloat | BuiltinFunction::StringIsFloat => true,
             BuiltinFunction::ColorBrighter
@@ -571,6 +580,7 @@ pub enum Expression {
     ImageReference {
         resource_ref: ImageReference,
         source_location: Option<SourceLocation>,
+        nine_slice: Option<[u16; 4]>,
     },
 
     Condition {
@@ -1059,8 +1069,8 @@ impl Expression {
                     op: '*',
                 },
                 (
-                    Type::Struct { fields: ref left, .. },
-                    Type::Struct { fields: right, name, node: n, rust_attributes },
+                    ref from_ty @ Type::Struct { fields: ref left, .. },
+                    Type::Struct { fields: right, .. },
                 ) if left != right => {
                     if let Expression::Struct { mut values, .. } = self {
                         let mut new_values = HashMap::new();
@@ -1080,12 +1090,7 @@ impl Expression {
                             Expression::StructFieldAccess {
                                 base: Box::new(Expression::ReadLocalVariable {
                                     name: var_name.into(),
-                                    ty: Type::Struct {
-                                        fields: left.clone(),
-                                        name: name.clone(),
-                                        node: n.clone(),
-                                        rust_attributes: rust_attributes.clone(),
-                                    },
+                                    ty: from_ty.clone(),
                                 }),
                                 name: key.clone(),
                             }
@@ -1226,11 +1231,11 @@ impl Expression {
             | Type::Callback { .. }
             | Type::ComponentFactory
             | Type::Function { .. }
-            | Type::Void
             | Type::InferredProperty
             | Type::InferredCallback
             | Type::ElementReference
             | Type::LayoutCache => Expression::Invalid,
+            Type::Void => Expression::CodeBlock(vec![]),
             Type::Float32 => Expression::NumberLiteral(0., Unit::None),
             Type::String => Expression::StringLiteral(String::new()),
             Type::Int32 | Type::Color | Type::UnitProduct(_) => Expression::Cast {
@@ -1246,6 +1251,7 @@ impl Expression {
             Type::Image => Expression::ImageReference {
                 resource_ref: ImageReference::None,
                 source_location: None,
+                nine_slice: None,
             },
             Type::Bool => Expression::BoolLiteral(false),
             Type::Model => Expression::Invalid,
@@ -1285,7 +1291,14 @@ impl Expression {
                 nr.mark_as_set();
                 let mut lookup = nr.element().borrow().lookup_property(nr.name());
                 lookup.is_local_to_component &= ctx.is_local_element(&nr.element());
-                if lookup.is_valid_for_assignment() {
+                if lookup.property_visibility == PropertyVisibility::Constexpr {
+                    ctx.diag.push_error(
+                        "The property must be known at compile time and cannot be changed at runtime"
+                            .into(),
+                        node,
+                    );
+                    false
+                } else if lookup.is_valid_for_assignment() {
                     if !nr
                         .element()
                         .borrow()
@@ -1481,6 +1494,12 @@ pub enum EasingCurve {
     #[default]
     Linear,
     CubicBezier(f32, f32, f32, f32),
+    EaseInElastic,
+    EaseOutElastic,
+    EaseInOutElastic,
+    EaseInBounce,
+    EaseOutBounce,
+    EaseInOutBounce,
     // CubicBezierNonConst([Box<Expression>; 4]),
     // Custom(Box<dyn Fn(f32)->f32>),
 }

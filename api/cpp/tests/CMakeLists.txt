@@ -17,6 +17,8 @@ macro(slint_test NAME)
     target_compile_definitions(test_${NAME} PRIVATE
         SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/\"
     )
+    # Use debug version of run-time library to enable MSVC iterator debugging
+    set_property(TARGET test_${NAME} PROPERTY MSVC_RUNTIME_LIBRARY MultiThreadedDebugDLL)
     add_test(NAME test_${NAME} COMMAND test_${NAME})
 
     if(MSVC)
@@ -39,13 +41,15 @@ if(SLINT_FEATURE_INTERPRETER)
 endif()
 
 slint_test(properties)
-if(SLINT_FEATURE_STD)
+if(NOT SLINT_FEATURE_FREESTANDING)
     slint_test(eventloop)
     target_link_libraries(test_eventloop PRIVATE Threads::Threads)
 endif()
 slint_test(models)
 
-add_subdirectory(multiple-includes)
+if(SLINT_FEATURE_COMPILER OR SLINT_COMPILER)
+    add_subdirectory(multiple-includes)
+endif()
 
 slint_test(platform_eventloop)
 target_link_libraries(test_platform_eventloop PRIVATE Threads::Threads)

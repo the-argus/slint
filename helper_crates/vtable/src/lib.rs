@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 /*!
 This crate allows you to create ffi-friendly virtual tables.
@@ -231,7 +231,7 @@ impl<'a, T: ?Sized + VTableMeta> Copy for VRef<'a, T> {}
 
 impl<'a, T: ?Sized + VTableMeta> Clone for VRef<'a, T> {
     fn clone(&self) -> Self {
-        Self { inner: self.inner, phantom: PhantomData }
+        *self
     }
 }
 
@@ -542,7 +542,7 @@ impl<Base, T: ?Sized + VTableMeta, Flag> Copy for VOffset<Base, T, Flag> {}
 
 impl<Base, T: ?Sized + VTableMeta, Flag> Clone for VOffset<Base, T, Flag> {
     fn clone(&self) -> Self {
-        Self { vtable: self.vtable, offset: self.offset, phantom: PhantomData }
+        *self
     }
 }
 

@@ -3,14 +3,14 @@
 
 [package]
 name = "i-slint-backend-linuxkms"
-version = "1.2.0"
-authors = ["Slint Developers <info@slint-ui.com>"]
-edition = "2021"
-license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial"
 description = "OpenGL rendering backend for Slint"
-repository = "https://github.com/slint-ui/slint"
-homepage = "https://slint.dev"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
+version.workspace = true
 
 [lib]
 path = "lib.rs"
@@ -18,25 +18,28 @@ path = "lib.rs"
 [features]
 renderer-skia = ["renderer-skia-vulkan", "renderer-skia-opengl"]
 renderer-skia-vulkan = ["i-slint-renderer-skia/vulkan", "vulkano"]
-renderer-skia-opengl = ["i-slint-renderer-skia/opengl", "drm", "gbm", "glutin", "raw-window-handle"]
-renderer-femtovg = ["i-slint-renderer-femtovg", "drm", "gbm", "glutin", "raw-window-handle"]
+renderer-skia-opengl = ["i-slint-renderer-skia/opengl", "drm", "gbm", "gbm-sys", "glutin", "raw-window-handle"]
+renderer-femtovg = ["i-slint-renderer-femtovg", "drm", "gbm", "gbm-sys", "glutin", "raw-window-handle"]
+libseat = ["dep:libseat"]
 
 #default = ["renderer-skia", "renderer-femtovg"]
+default = []
 
 [dependencies]
-i-slint-core = { version = "=1.2.0", path = "../../../internal/core", features = ["image-decoders", "svg"] }
-i-slint-common = { version = "=1.2.0", path = "../../../internal/common" }
-i-slint-renderer-skia = { version = "=1.2.0", path = "../../renderers/skia", optional = true }
-i-slint-renderer-femtovg = { version = "=1.2.0", path = "../../renderers/femtovg", optional = true }
+i-slint-core = { workspace = true, features = ["default", "image-decoders", "svg"] }
+i-slint-common = { workspace = true, features = ["default"] }
+i-slint-renderer-skia = { workspace = true, features = ["default", "kms"], optional = true }
+i-slint-renderer-femtovg = { workspace = true, features = ["default"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 input = { version = "0.8.2" }
-xkbcommon = { version = "0.5.0" }
-calloop = { version = "0.10.5" }
-libseat = { version = "0.1.7" }
-nix = { version = "0.26.2" }
-vulkano = { version = "0.33.0", optional = true, default-features = false }
+xkbcommon = { version = "0.7.0" }
+calloop = { version = "0.12.3" }
+libseat = { version = "0.2.1", optional = true, default-features = false }
+nix = { version = "0.27.0", features=["fs"] }
+vulkano = { version = "0.34.0", optional = true, default-features = false }
 drm = { version = "0.9.0", optional = true }
 gbm = { version = "0.12.0", optional = true, default-features = false, features = ["drm-support"] }
-glutin = { version = "0.30.8", optional = true, default-features = false, features = ["libloading", "egl"] }
+gbm-sys = { version = "0.2.2", optional = true }
+glutin = { workspace = true, optional = true, default-features = false, features = ["libloading", "egl"] }
 raw-window-handle = { version = "0.5.2", optional = true }

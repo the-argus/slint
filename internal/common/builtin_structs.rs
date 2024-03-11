@@ -29,21 +29,25 @@
 macro_rules! for_each_builtin_structs {
     ($macro:ident) => {
         $macro![
-            /// KeyboardModifier provides booleans to indicate possible modifier keys on a keyboard, such as Shift, Control, etc.
-            /// This structure is generated as part of `KeyEvent`
-            /// On macOS, the command key is mapped to the meta modifier.
-            /// On Windows, the windows key is mapped to the meta modifier.
+            /// The `KeyboardModifiers` struct provides booleans to indicate possible modifier keys on a keyboard, such as Shift, Control, etc.
+            /// It is provided as part of `KeyEvent`'s `modifiers` field.
+            ///
+            /// Keyboard shortcuts on Apple platforms typically use the Command key (⌘), such as Command+C for "Copy". On other platforms
+            /// the same shortcut is typically represented using Control+C. To make it easier to develop cross-platform applications, on macOS,
+            /// Slint maps the Command key to the control modifier, and the Control key to the meta modifier.
+            ///
+            /// On Windows, the Windows key is mapped to the meta modifier.
             #[derive(Copy, Eq)]
             struct KeyboardModifiers {
                 @name = "slint::private_api::KeyboardModifiers"
                 export {
-                    /// Indicates the alt key on a keyboard.
+                    /// Indicates the Alt key on a keyboard.
                     alt: bool,
-                    /// Indicates the control key on a keyboard.
+                    /// Indicates the Control key on a keyboard, except on macOS, where it is the Command key (⌘).
                     control: bool,
-                    /// Indicates the shift key on a keyboard.
+                    /// Indicates the Shift key on a keyboard.
                     shift: bool,
-                    /// Indicates the command key on macos.
+                    /// Indicates the Control key on macos, and the Windows key on Windows.
                     meta: bool,
                 }
                 private {
@@ -51,7 +55,7 @@ macro_rules! for_each_builtin_structs {
             }
 
             /// Represents a Pointer event sent by the windowing system.
-            /// This structure is generated and passed to the `pointer-event` callback of the `TouchArea` element.
+            /// This structure is passed to the `pointer-event` callback of the `TouchArea` element.
             struct PointerEvent {
                 @name = "slint::private_api::PointerEvent"
                 export {
@@ -59,6 +63,22 @@ macro_rules! for_each_builtin_structs {
                     button: PointerEventButton,
                     /// The kind of the event
                     kind: PointerEventKind,
+                    /// The keyboard modifiers pressed during the event
+                    modifiers: KeyboardModifiers,
+                }
+                private {
+                }
+            }
+
+            /// Represents a Pointer scroll (or wheel) event sent by the windowing system.
+            /// This structure is passed to the `scroll-event` callback of the `TouchArea` element.
+            struct PointerScrollEvent {
+                @name = "slint::private_api::PointerScrollEvent"
+                export {
+                    /// The amount of pixel in the horizontal direction
+                    delta_x: Coord,
+                    /// The amount of pixel in the vertical direction
+                    delta_y: Coord,
                     /// The keyboard modifiers pressed during the event
                     modifiers: KeyboardModifiers,
                 }
@@ -74,16 +94,24 @@ macro_rules! for_each_builtin_structs {
                     text: SharedString,
                     /// The keyboard modifiers active at the time of the key press event.
                     modifiers: KeyboardModifiers,
+                    /// This field is set to true for key press events that are repeated,
+                    /// i.e. the key is held down. It's always false for key release events.
+                    repeat: bool,
                 }
                 private {
                     /// Indicates whether the key was pressed or released
                     event_type: KeyEventType,
-                    /// If the event type is KeyEventType::UpdateComposition, then this field specifies
-                    /// the start of the selection as byte offsets within the preedit text.
-                    preedit_selection_start: usize,
-                    /// If the event type is KeyEventType::UpdateComposition, then this field specifies
-                    /// the end of the selection as byte offsets within the preedit text.
-                    preedit_selection_end: usize,
+                    /// If the event type is KeyEventType::UpdateComposition or KeyEventType::CommitComposition,
+                    /// then this field specifies what part of the current text to replace.
+                    /// Relative to the offset of the pre-edit text within the text input element's text.
+                    replacement_range: Option<core::ops::Range<i32>>,
+                    /// If the event type is KeyEventType::UpdateComposition, this is the new pre-edit text
+                    preedit_text: SharedString,
+                    /// The selection within the preedit_text
+                    preedit_selection: Option<core::ops::Range<i32>>,
+                    /// The new cursor position, when None, the cursor is put after the text that was just inserted
+                    cursor_position: Option<i32>,
+                    anchor_position: Option<i32>,
                 }
             }
 
@@ -102,7 +130,7 @@ macro_rules! for_each_builtin_structs {
             /// This is used to define the column and the column header of a TableView
             #[non_exhaustive]
             struct TableColumn {
-                @name = "TableColumn"
+                @name = "slint::private_api::TableColumn"
                 export {
                     /// The title of the column header
                     title: SharedString,

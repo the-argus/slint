@@ -15,6 +15,7 @@ use crate::lookup::{LookupCtx, LookupObject, LookupResult};
 use crate::object_tree::*;
 use crate::parser::{identifier_text, syntax_nodes, NodeOrToken, SyntaxKind, SyntaxNode};
 use crate::typeregister::TypeRegister;
+use core::num::IntErrorKind;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -88,7 +89,10 @@ pub fn resolve_expressions(
             visit_element_expressions(elem, |expr, property_name, property_type| {
                 if is_repeated {
                     // The first expression is always the model and it needs to be resolved with the parent scope
-                    debug_assert!(elem.borrow().repeated.as_ref().is_none()); // should be none because it is taken by the visit_element_expressions function
+                    debug_assert!(matches!(
+                        elem.borrow().repeated.as_ref().unwrap().model,
+                        Expression::Invalid
+                    )); // should be Invalid because it is taken by the visit_element_expressions function
                     resolve_expression(
                         expr,
                         property_name,
@@ -208,7 +212,11 @@ impl Expression {
         ctx: &mut LookupCtx,
     ) -> Expression {
         let return_type = ctx.return_type().clone();
-        Expression::ReturnStatement(node.Expression().map(|n| {
+        let e = node.Expression();
+        if e.is_none() && !matches!(return_type, Type::Void | Type::Invalid) {
+            ctx.diag.push_error(format!("Must return a value of type '{return_type}'"), &node);
+        }
+        Expression::ReturnStatement(e.map(|n| {
             Box::new(Self::from_expression_node(n, ctx).maybe_convert_to(
                 return_type,
                 &node,
@@ -332,12 +340,13 @@ impl Expression {
             return Expression::ImageReference {
                 resource_ref: ImageReference::None,
                 source_location: Some(node.to_source_location()),
+                nine_slice: None,
             };
         }
 
         let absolute_source_path = {
             let path = std::path::Path::new(&s);
-            if path.is_absolute() || s.starts_with("http://") || s.starts_with("https://") {
+            if crate::pathutils::is_absolute(path) {
                 s
             } else {
                 ctx.type_loader
@@ -345,13 +354,53 @@ impl Expression {
                         loader.resolve_import_path(Some(&(*node).clone().into()), &s)
                     })
                     .map(|i| i.0.to_string_lossy().to_string())
-                    .unwrap_or(s)
+                    .unwrap_or_else(|| {
+                        crate::pathutils::join(
+                            &crate::pathutils::dirname(node.source_file.path()),
+                            path,
+                        )
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or(s.clone())
+                    })
+            }
+        };
+
+        let nine_slice = node
+            .children_with_tokens()
+            .filter_map(|n| n.into_token())
+            .filter(|t| t.kind() == SyntaxKind::NumberLiteral)
+            .map(|arg| {
+                arg.text().parse().unwrap_or_else(|err: std::num::ParseIntError| {
+                    match err.kind() {
+                        IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => {
+                            ctx.diag.push_error("Number too big".into(), &arg)
+                        }
+                        IntErrorKind::InvalidDigit => ctx.diag.push_error(
+                            "Border widths of a nine-slice can't have units".into(),
+                            &arg,
+                        ),
+                        _ => ctx.diag.push_error("Cannot parse number literal".into(), &arg),
+                    };
+                    0u16
+                })
+            })
+            .collect::<Vec<u16>>();
+
+        let nine_slice = match nine_slice.as_slice() {
+            [x] => Some([*x, *x, *x, *x]),
+            [x, y] => Some([*x, *y, *x, *y]),
+            [x, y, z, w] => Some([*x, *y, *z, *w]),
+            [] => None,
+            _ => {
+                assert!(ctx.diag.has_error());
+                None
             }
         };
 
         Expression::ImageReference {
             resource_ref: ImageReference::AbsolutePath(absolute_source_path),
             source_location: Some(node.to_source_location()),
+            nine_slice,
         }
     }
 
@@ -880,6 +929,10 @@ impl Expression {
                         .collect()
                 }
             }
+            Type::Invalid => {
+                debug_assert!(ctx.diag.has_error());
+                arguments.into_iter().map(|x| x.0).collect()
+            }
             _ => {
                 ctx.diag.push_error("The expression is not a function".into(), &node);
                 arguments.into_iter().map(|x| x.0).collect()
@@ -1144,9 +1197,11 @@ impl Expression {
         let mut values: Vec<Expression> =
             node.Expression().map(|e| Expression::from_expression_node(e, ctx)).collect();
 
-        // FIXME: what's the type of an empty array ?
-        let element_ty =
-            Self::common_target_type_for_type_list(values.iter().map(|expr| expr.ty()));
+        let element_ty = if values.is_empty() {
+            Type::Void
+        } else {
+            Self::common_target_type_for_type_list(values.iter().map(|expr| expr.ty()))
+        };
 
         for e in values.iter_mut() {
             *e = core::mem::replace(e, Expression::Invalid).maybe_convert_to(
@@ -1184,7 +1239,7 @@ impl Expression {
     /// This function is used to find a type that's suitable for casting each instance of a bunch of expressions
     /// to a type that captures most aspects. For example for an array of object literals the result is a merge of
     /// all seen fields.
-    fn common_target_type_for_type_list(types: impl Iterator<Item = Type>) -> Type {
+    pub fn common_target_type_for_type_list(types: impl Iterator<Item = Type>) -> Type {
         types.fold(Type::Invalid, |target_type, expr_ty| {
             if target_type == expr_ty {
                 target_type
@@ -1203,7 +1258,7 @@ impl Expression {
                             fields: elem_fields,
                             name: elem_name,
                             node: elem_node,
-                            rust_attributes: deriven,
+                            rust_attributes: derived,
                         },
                     ) => {
                         for (elem_name, elem_ty) in elem_fields.into_iter() {
@@ -1216,7 +1271,7 @@ impl Expression {
                                 ) => {
                                     *existing_field.get_mut() =
                                         Self::common_target_type_for_type_list(
-                                            [existing_field.get().clone(), elem_ty].iter().cloned(),
+                                            [existing_field.get().clone(), elem_ty].into_iter(),
                                         );
                                 }
                             }
@@ -1225,9 +1280,16 @@ impl Expression {
                             name: result_name.or(elem_name),
                             fields: result_fields,
                             node: result_node.or(elem_node),
-                            rust_attributes: rust_attributes.or(deriven),
+                            rust_attributes: rust_attributes.or(derived),
                         }
                     }
+                    (Type::Array(lhs), Type::Array(rhs)) => Type::Array(if *lhs == Type::Void {
+                        rhs
+                    } else if *rhs == Type::Void {
+                        lhs
+                    } else {
+                        Self::common_target_type_for_type_list([*lhs, *rhs].into_iter()).into()
+                    }),
                     (Type::Color, Type::Brush) | (Type::Brush, Type::Color) => Type::Brush,
                     (target_type, expr_ty) => {
                         if expr_ty.can_convert(&target_type) {
@@ -1330,11 +1392,21 @@ fn continue_lookup_within_element(
             Some(NodeOrToken::Token(second)),
         )
     } else if matches!(lookup_result.property_type, Type::Function { .. }) {
-        if !lookup_result.is_local_to_component
-            && lookup_result.property_visibility == PropertyVisibility::Private
+        if lookup_result.property_visibility == PropertyVisibility::Private && !local_to_component {
+            let message = format!("The function '{}' is private. Annotate it with 'public' to make it accessible from other components", second.text());
+            if !lookup_result.is_local_to_component {
+                ctx.diag.push_error(message, &second);
+            } else {
+                ctx.diag.push_warning(message+". Note: this used to be allowed in previous version, but this should be considered an error", &second);
+            }
+        } else if lookup_result.property_visibility == PropertyVisibility::Protected
+            && !local_to_component
+            && !(lookup_result.is_in_direct_base
+                && ctx.component_scope.first().map_or(false, |x| Rc::ptr_eq(x, elem)))
         {
-            ctx.diag.push_error(format!("The function '{}' is private. Annotate it with 'public' to make it accessible from other components", second.text()), &second);
-        } else if let Some(x) = it.next() {
+            ctx.diag.push_error(format!("The function '{}' is protected", second.text()), &second);
+        }
+        if let Some(x) = it.next() {
             ctx.diag.push_error("Cannot access fields of a function".into(), &x)
         }
         if let Some(f) =
@@ -1462,6 +1534,14 @@ fn resolve_two_way_bindings(
 
                         if let Some(nr) = resolve_two_way_binding(n, &mut lookup_ctx) {
                             binding.two_way_bindings.push(nr.clone());
+
+                            nr.element()
+                                .borrow()
+                                .property_analysis
+                                .borrow_mut()
+                                .entry(nr.name().to_string())
+                                .or_default()
+                                .is_linked = true;
 
                             // Check the compatibility.
                             let mut rhs_lookup = nr.element().borrow().lookup_property(nr.name());

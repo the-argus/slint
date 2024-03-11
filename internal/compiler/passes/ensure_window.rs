@@ -3,7 +3,7 @@
 
 //! Make sure that the top level element of the component is always a Window
 
-use crate::expression_tree::{BindingExpression, Expression};
+use crate::expression_tree::{BindingExpression, BuiltinFunction, Expression};
 use crate::langtype::Type;
 use crate::namedreference::NamedReference;
 use crate::object_tree::{Component, Element};
@@ -23,7 +23,7 @@ pub fn ensure_window(
         return; // already a window, nothing to do
     }
 
-    let window_type = type_register.lookup_element("Window").unwrap();
+    let window_type = type_register.lookup_builtin_element("Window").unwrap();
 
     let win_elem = component.root_element.clone();
 
@@ -47,14 +47,16 @@ pub fn ensure_window(
         layout_info_prop: Default::default(),
         default_fill_parent: Default::default(),
         accessibility_props: Default::default(),
+        geometry_props: Default::default(),
         is_flickable_viewport: false,
         item_index: Default::default(),
         item_index_of_first_children: Default::default(),
-        node: win_elem_mut.node.clone(),
+        debug: std::mem::take(&mut win_elem_mut.debug),
+
         inline_depth: 0,
         is_legacy_syntax: false,
     };
-    let new_root = Rc::new(RefCell::new(new_root));
+    let new_root = new_root.make_rc();
     win_elem_mut.children.push(new_root.clone());
     drop(win_elem_mut);
 
@@ -95,6 +97,31 @@ pub fn ensure_window(
         if must_update.contains(nr) {
             *nr = NamedReference::new(&new_root, nr.name());
         }
+    });
+
+    // Fix up any ElementReferences for builtin member function calls, to not refer to the WindowItem,
+    // as we swapped out the base_type.
+    let fixup_element_reference = |expr: &mut Expression| match expr {
+        Expression::FunctionCall { function, arguments, .. }
+            if matches!(
+                function.as_ref(),
+                Expression::BuiltinFunctionReference(BuiltinFunction::ItemMemberFunction(..), ..)
+            ) =>
+        {
+            for arg in arguments.iter_mut() {
+                if matches!(arg, Expression::ElementReference(elr)
+                    if elr.upgrade().map_or(false, |elemrc| Rc::ptr_eq(&elemrc, &win_elem)) )
+                {
+                    *arg = Expression::ElementReference(Rc::downgrade(&new_root))
+                }
+            }
+        }
+        _ => {}
+    };
+
+    crate::object_tree::visit_all_expressions(component, |expr, _| {
+        expr.visit_recursive_mut(&mut |expr| fixup_element_reference(expr));
+        fixup_element_reference(expr)
     });
 
     component.root_element.borrow_mut().set_binding_if_not_set("background".into(), || {

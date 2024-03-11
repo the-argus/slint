@@ -3,16 +3,17 @@
 
 [package]
 name = "slint"
-version = "1.2.0"
-authors = ["Slint Developers <info@slint.dev>"]
-edition = "2021"
-license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial"
 description = "GUI toolkit to efficiently develop fluid graphical user interfaces for embedded devices and desktop applications"
-repository = "https://github.com/slint-ui/slint"
+authors.workspace = true
+documentation.workspace = true
+edition.workspace = true
 homepage = "https://slint.rs"
-categories = ["gui", "rendering::engine"]
-keywords = ["gui", "toolkit", "graphics", "design", "ui"]
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
+version.workspace = true
+categories = ["gui", "rendering::engine", "no-std"]
 
 [lib]
 path = "lib.rs"
@@ -21,10 +22,9 @@ path = "lib.rs"
 
 default = [
   "std",
-  "backend-winit",
+  "backend-default",
   "renderer-femtovg",
   "renderer-software",
-  "backend-qt",
   "accessibility",
   "compat-1-2",
 ]
@@ -56,6 +56,10 @@ libm = ["i-slint-core/libm"]
 ## of the [log](https://crates.io/crates/log) crate instead of just `println!()`.
 log = ["dep:log"]
 
+## Implement the `serde::Serialize` and `serde::Deserialize` for some of the base types
+## such as `SharedString` and `SharedVector`.
+serde = ["i-slint-core/serde"]
+
 ## This feature enables the software renderer to pick up fonts from the operating system for text rendering.
 software-renderer-systemfonts = ["renderer-software", "i-slint-core/software-renderer-systemfonts"]
 
@@ -78,7 +82,7 @@ accessibility = ["i-slint-backend-selector/accessibility"]
 
 #! Slint needs a backend that will act as liaison between Slint and the OS.
 #! By default, Slint will use the Qt backend, if Qt is installed, otherwise, it
-#! will use [Winit](https://crates.io/crates/winit) with [Femtovg](https://crates.io/crates/femtovg).
+#! will use [Winit](https://crates.io/crates/winit) with [FemtoVG](https://crates.io/crates/femtovg).
 #! Both backends are compiled in. If you want to not compile one of these you need
 #! to disable the default feature and re-enable one backend. It is also possible
 #! to use Slint without backend if you provide the platform abstraction yourself
@@ -91,7 +95,7 @@ accessibility = ["i-slint-backend-selector/accessibility"]
 #! are enabled, using the `SLINT_BACKEND`  environment variable.
 #!  * `SLINT_BACKEND=Qt` selects the Qt backend
 #!  * `SLINT_BACKEND=winit` selects the winit backend
-#!  * `SLINT_BACKEND=winit-femtovg` selects the winit backend with the femtovg renderer
+#!  * `SLINT_BACKEND=winit-femtovg` selects the winit backend with the FemtoVG renderer
 #!  * `SLINT_BACKEND=winit-skia` selects the winit backend with the skia renderer
 #!  * `SLINT_BACKEND=winit-software` selects the winit backend with the software renderer
 #!
@@ -103,9 +107,9 @@ accessibility = ["i-slint-backend-selector/accessibility"]
 ## This backend also provides the `native` style.
 ## It requires Qt 5.15 or later to be installed. If Qt is not installed, the
 ## backend will not be operational
-backend-qt = ["i-slint-backend-selector/i-slint-backend-qt", "std"]
+backend-qt = ["i-slint-backend-selector/backend-qt", "std", "i-slint-backend-qt"]
 
-## The [winit](https://crates.io/crates/log) crate is used for the event loop and windowing system integration.
+## The [winit](https://crates.io/crates/winit) crate is used for the event loop and windowing system integration.
 ## It supports Windows, macOS, web browsers, X11 and Wayland. X11 and wayland are only available when
 ## compiling for Linux or other Unix-like operating systems. With this feature, both X11 and Wayland are supported.
 ## For a smaller build, omit this feature and select one of the other specific `backend-winit-XX` features.
@@ -119,6 +123,10 @@ backend-winit-x11 = ["i-slint-backend-selector/backend-winit-x11", "std"]
 ## with support for the Wayland window system on Unix.
 backend-winit-wayland = ["i-slint-backend-selector/backend-winit-wayland", "std"]
 
+## Alias to a backend and renderer that depends on the platform.
+## Will select the Qt backend on linux if present, and the winit otherwise
+backend-default = ["i-slint-backend-selector/default", "i-slint-backend-qt"]
+
 # deprecated aliases
 renderer-winit-femtovg = ["renderer-femtovg"]
 renderer-winit-skia = ["renderer-skia"]
@@ -126,8 +134,8 @@ renderer-winit-skia-opengl= ["renderer-skia-opengl"]
 renderer-winit-skia-vulkan= ["renderer-skia-vulkan"]
 renderer-winit-software = ["renderer-software"]
 
-## Render using the [femtovg](https://crates.io/crates/femtovg) crate.
-renderer-femtovg = ["i-slint-backend-selector/renderer-femtovg", "std"]
+## Render using the [FemtoVG](https://crates.io/crates/femtovg) crate.
+renderer-femtovg = ["i-slint-backend-selector/renderer-femtovg", "dep:i-slint-renderer-femtovg", "std"]
 
 ## Render using [Skia](https://skia.org/).
 renderer-skia = ["i-slint-backend-selector/renderer-skia", "std"]
@@ -142,17 +150,24 @@ renderer-skia-vulkan = ["i-slint-backend-selector/renderer-skia-vulkan", "std"]
 renderer-software = ["i-slint-backend-selector/renderer-software", "i-slint-core/software-renderer"]
 
 ## KMS with Vulkan or EGL and libinput on Linux are used to render the application in full screen mode, without any
-## windowing system.
+## windowing system. Requires libseat. If you don't have libseat, select `backend-linuxkms-noseat` instead. (Experimental)
 backend-linuxkms = ["i-slint-backend-selector/backend-linuxkms", "std"]
 
+## KMS with Vulkan or EGL and libinput on Linux are used to render the application in full screen mode, without any
+## windowing system. (Experimental)
+backend-linuxkms-noseat = ["i-slint-backend-selector/backend-linuxkms-noseat", "std"]
+
+## Use the backend based on the [android-activity](https://docs.rs/android-activity) crate. (Using it's native activity feature)
+backend-android-activity-05 = ["i-slint-backend-android-activity/native-activity"]
+
 [dependencies]
-i-slint-core = { version = "=1.2.0", path = "../../../internal/core", default-features = false }
-slint-macros = { version = "=1.2.0", path = "../macros" }
-i-slint-backend-selector = { version = "=1.2.0", path = "../../../internal/backends/selector" }
+i-slint-core = { workspace = true }
+slint-macros = { workspace = true }
+i-slint-backend-selector = { workspace = true }
 
 const-field-offset = { version = "0.1.2", path = "../../../helper_crates/const-field-offset" }
 document-features = { version = "0.2.0", optional = true }
-vtable = { version = "0.1.6", path = "../../../helper_crates/vtable" }
+vtable = { workspace = true }
 
 once_cell = { version = "1.5", default-features = false, features = ["alloc"] }
 pin-weak = { version = "1.1", default-features = false }
@@ -160,16 +175,28 @@ num-traits = { version = "0.2", default-features = false }
 
 log = { version = "0.4.17", optional = true }
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# FemtoVG is disabled on android because it doesn't compile without setting RUST_FONTCONFIG_DLOPEN=on
+# end even then wouldn't work because it can't load fonts
+i-slint-renderer-femtovg = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+i-slint-backend-android-activity = { workspace = true, optional = true }
+
 [dev-dependencies]
 slint-build = { path = "../build" }
 i-slint-backend-testing = { path = "../../../internal/backends/testing" }
 serde_json = "1.0.96"
 serde = { version = "1.0.163", features = ["derive"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# this line is there to add the "enable" feature by default, but only on linux
+i-slint-backend-qt = { workspace = true, features = [ "enable" ], optional = true }
+
 [package.metadata.docs.rs]
 rustdoc-args = [
-  "--html-in-header",
-  "docs/resources/slint-docs-preview.html",
+  # "--html-in-header",
+  # "docs/resources/slint-docs-preview.html",
   "--html-in-header",
   "docs/resources/slint-docs-highlight.html",
 ]

@@ -11,7 +11,7 @@ use i_slint_compiler::object_tree::{self, Component, Document, ElementRc};
 use i_slint_compiler::parser::{syntax_nodes, NodeOrToken, SyntaxKind, SyntaxNode};
 use i_slint_compiler::typeloader::TypeLoader;
 use std::cell::RefCell;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -50,7 +50,7 @@ fn main() -> std::io::Result<()> {
         let source = std::fs::read_to_string(path)?;
 
         if args.inline {
-            let file = std::fs::File::create(path)?;
+            let file = BufWriter::new(std::fs::File::create(path)?);
             process_file(source, path, file, &args)?
         } else {
             process_file(source, path, std::io::stdout(), &args)?
@@ -67,7 +67,7 @@ fn process_rust_file(source: String, mut file: impl Write, args: &Cli) -> std::i
         let code = &source[range];
 
         let mut diag = BuildDiagnostics::default();
-        let syntax_node = i_slint_compiler::parser::parse(code.to_owned(), None, &mut diag);
+        let syntax_node = i_slint_compiler::parser::parse(code.to_owned(), None, None, &mut diag);
         let len = syntax_node.text_range().end().into();
         let mut state = init_state(&syntax_node, &mut diag);
         visit_node(syntax_node, &mut file, &mut state, args)?;
@@ -99,7 +99,7 @@ fn process_markdown_file(source: String, mut file: impl Write, args: &Cli) -> st
         source_slice = &source_slice[code_end..];
 
         let mut diag = BuildDiagnostics::default();
-        let syntax_node = i_slint_compiler::parser::parse(code.to_owned(), None, &mut diag);
+        let syntax_node = i_slint_compiler::parser::parse(code.to_owned(), None, None, &mut diag);
         let len = syntax_node.text_range().end().into();
         let mut state = init_state(&syntax_node, &mut diag);
         visit_node(syntax_node, &mut file, &mut state, args)?;
@@ -124,7 +124,7 @@ fn process_file(
     }
 
     let mut diag = BuildDiagnostics::default();
-    let syntax_node = i_slint_compiler::parser::parse(source.clone(), Some(path), &mut diag);
+    let syntax_node = i_slint_compiler::parser::parse(source.clone(), Some(path), None, &mut diag);
     let len = syntax_node.node.text_range().end().into();
     let mut state = init_state(&syntax_node, &mut diag);
     visit_node(syntax_node, &mut file, &mut state, args)?;
@@ -222,7 +222,7 @@ fn visit_node(
                     .borrow()
                     .children
                     .iter()
-                    .find(|c| c.borrow().node.as_ref().map_or(false, |n| n.node == node.node))
+                    .find(|c| c.borrow().debug.first().map_or(false, |n| n.0.node == node.node))
                     .cloned()
             } else if let Some(parent_co) = &state.current_component {
                 if node.parent().map_or(false, |n| n.kind() == SyntaxKind::Component) {

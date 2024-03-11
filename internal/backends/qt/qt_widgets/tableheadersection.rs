@@ -9,10 +9,6 @@ use super::*;
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeTableHeaderSection {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     pub item: Property<i_slint_core::model::TableColumn>,
     pub index: Property<i32>,
     pub cached_rendering_data: CachedRenderingData,
@@ -27,13 +23,6 @@ impl Item for NativeTableHeaderSection {
         self.widget_ptr.set(cpp! { unsafe [animation_tracker_property_ptr as "void*"] -> SlintTypeErasedWidgetPtr as "std::unique_ptr<SlintTypeErasedWidget>" {
             return make_unique_animated_widget<QWidget>(animation_tracker_property_ptr);
         }});
-    }
-
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
     }
 
     fn layout_info(
@@ -131,20 +120,12 @@ impl Item for NativeTableHeaderSection {
                 QImage header_image(size, QImage::Format_ARGB32_Premultiplied);
                 header_image.fill(Qt::transparent);
                 {QPainter p(&header_image); QPainter *painter_ = &p;
-            #else
-                // CE_Header in QCommonStyle calls setClipRect on the painter and replace the clips. So we need to cheat.
-                auto engine = (*painter)->paintEngine();
-                auto old_clip = engine->systemClip();
-                auto new_clip = (*painter)->clipRegion() * (*painter)->transform();
-                if (!old_clip.isNull())
-                    new_clip &= old_clip;
-                engine->setSystemClip(new_clip);
             #endif
 
             QStyleOptionHeader option;
-            option.initFrom(widget);
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
-            option.state |= QStyle::State_Horizontal;
+            option.state |= QStyle::State_Horizontal | QStyle::State_Enabled;
             option.rect = QRect(QPoint(), size / dpr);
 
             option.section = index;
@@ -170,15 +151,6 @@ impl Item for NativeTableHeaderSection {
             #if defined(Q_OS_MAC)
                 }
                 (painter_)->drawImage(QPoint(), header_image);
-            #else
-                engine->setSystemClip(old_clip);
-                // Qt is seriously bugged, setSystemClip will be scaled by the scale factor
-                auto actual_clip = engine->systemClip();
-                if (actual_clip != old_clip) {
-                    QSizeF s2 = actual_clip.boundingRect().size();
-                    QSizeF s1 = old_clip.boundingRect().size();
-                    engine->setSystemClip(old_clip * QTransform::fromScale(s1.width() / s2.width(), s1.height() / s2.height()));
-                }
             #endif
         });
     }

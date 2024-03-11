@@ -1,0 +1,173 @@
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+
+import { CupertinoFontSettings, CupertinoPalette, Icons } from "styling.slint";
+import { MenuBorder, ListItem, FocusBorder } from "components.slint";
+import { ComboBoxBase } from "../common/combobox-base.slint";
+
+export component ComboBox {
+    in property <[string]> model <=> i-base.model;
+    in property <bool> enabled <=> i-base.enabled;
+    out property <bool> has-focus <=> i-base.has-focus;
+    in-out property <int> current-index <=> i-base.current-index;
+    in-out property <string> current-value <=> i-base.current-value;
+
+    callback selected <=> i-base.selected;
+
+    private property <brush> background: CupertinoPalette.control-background;
+
+    min-width: max(160px, i-layout.min-width);
+    min-height: max(22px, i-layout.min-height);
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    forward-focus: i-base;
+
+    states [
+        disabled when !root.enabled : {
+            i-text.color: CupertinoPalette.foreground-secondary;
+            i-top-icon.colorize: CupertinoPalette.foreground-secondary;
+            i-bottom-icon.colorize: CupertinoPalette.foreground-secondary;
+            root.background: CupertinoPalette.tertiary-control-background;
+        }
+        pressed when i-base.pressed : {
+            root.background: CupertinoPalette.secondary-control-background;
+        }
+    ]
+
+    i-base := ComboBoxBase {
+        width: 100%;
+        height: 100%;
+
+        show-popup => {
+            i-popup.show();
+        }
+    }
+
+    FocusBorder {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: 8px;
+        has-focus: root.has-focus;
+    }
+
+    Rectangle {
+        drop-shadow-blur: 0.25px;
+        drop-shadow-color: #00000066;
+        drop-shadow-offset-y: 0.25px;
+        border-radius: 5px;
+        background: root.background;
+
+        Rectangle {
+            drop-shadow-blur: 1px;
+            drop-shadow-color: #00000026;
+            drop-shadow-offset-y: 1px;
+            border-radius: parent.border-radius;
+            background: root.background;
+            border-width: 1px;
+            border-color: CupertinoPalette.decent-border;
+            opacity: root.enabled ? 1 : 0.5;
+        }
+    }
+
+    i-layout := HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+        spacing: 4px;
+
+        i-text := Text {
+            horizontal-alignment: left;
+            vertical-alignment: center;
+            font-size: CupertinoFontSettings.body.font-size;
+            font-weight: CupertinoFontSettings.body.font-weight;
+            color: CupertinoPalette.foreground;
+            text: root.current-value;
+        }
+
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 16px;
+            height: self.width;
+
+            if (root.enabled) : Rectangle {
+                width: 100%;
+                height: 100%;
+                drop-shadow-blur: 3px;
+                drop-shadow-color: #00000066;
+                drop-shadow-offset-y: 0.5px;
+                border-radius: 4px;
+                background: CupertinoPalette.accent-background;
+
+                Rectangle {
+                    drop-shadow-blur: 2px;
+                    drop-shadow-color: #00000026;
+                    drop-shadow-offset-y: 1px;
+                    border-radius: parent.border-radius;
+                    background: parent.background;
+                }
+
+                Rectangle {
+                    drop-shadow-blur: 1px;
+                    drop-shadow-color: #00000026;
+                    drop-shadow-offset-y: 0.5px;
+                    border-radius: parent.border-radius;
+                    background: parent.background;
+                }
+
+                Rectangle {
+                    border-radius: parent.border-radius;
+                    background: CupertinoPalette.dimmer;
+                    opacity: 0.17;
+                }
+            }
+
+            VerticalLayout {
+                padding: 4px;
+                spacing: 4px;
+
+                i-top-icon := Image {
+                    x: (parent.width - self.width) / 2;
+                    colorize: CupertinoPalette.accent-foreground;
+                    source: Icons.chevron-up;
+                }
+
+                i-bottom-icon := Image {
+                    x: (parent.width - self.width) / 2;
+                    colorize: CupertinoPalette.accent-foreground;
+                    source: Icons.chevron-down;
+                }
+            }
+        }
+    }
+
+    i-popup := PopupWindow {
+        x: 0;
+        y: parent.height + 6px;
+        min-width: root.width;
+
+        MenuBorder {
+            VerticalLayout {
+                padding: 4px;
+
+                for value[index] in root.model : ListItem {
+                    padding-horizontal: 0;
+                    item: { text: value };
+                    is-selected: index == root.current-index;
+                    has-hover: i-touch-area.has-hover;
+                    pressed: i-touch-area.pressed;
+                    pressed-x: i-touch-area.pressed-x;
+                    pressed-y: i-touch-area.pressed-y;
+
+                    i-touch-area := TouchArea {
+                        clicked => {
+                            i-base.select(index);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -3,19 +3,21 @@
 
 [package]
 name = "i-slint-common"
-version = "1.2.0"
-authors = ["Slint Developers <info@slint.dev>"]
-edition = "2021"
-license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial"
 description = "Helper crate for sharing code & data structures between i-slint-core and slint-compiler"
-repository = "https://github.com/slint-ui/slint"
-homepage = "https://slint.dev"
-
+authors.workspace = true
+documentation.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [lib]
 path = "lib.rs"
 
 [features]
+default = []
 shared-fontdb = ["dep:fontdb", "dep:libloading", "derive_more", "cfg-if"]
 
 [dependencies]
@@ -23,8 +25,8 @@ fontdb = { workspace = true, optional = true }
 derive_more = { version = "0.99.5", optional = true }
 cfg-if = { version = "1", optional = true }
 
-[target.'cfg(not(any(target_family = "windows", target_os = "macos", target_os = "ios", target_arch = "wasm32")))'.dependencies]
+[target.'cfg(not(any(target_family = "windows", target_os = "macos", target_os = "ios", target_arch = "wasm32", target_os = "android")))'.dependencies]
 libloading = { version = "0.8.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-fontdb = { workspace = true, optional = true, default-features = true, features = ["fontconfig", "memmap"] }
+fontdb = { workspace = true, optional = true, default-features = true }

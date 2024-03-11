@@ -7,17 +7,20 @@ This module contains types that are public and re-exported in the slint-rs as we
 
 #![warn(missing_docs)]
 
-use crate::component::ComponentVTable;
 #[cfg(target_has_atomic = "ptr")]
 pub use crate::future::*;
-use crate::input::{KeyEventType, KeyInputEvent, MouseEvent};
+use crate::input::{KeyEventType, MouseEvent};
+use crate::item_tree::ItemTreeVTable;
 use crate::window::{WindowAdapter, WindowInner};
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
 
 /// A position represented in the coordinate space of logical pixels. That is the space before applying
 /// a display device specific scale factor.
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
+#[repr(C)]
 pub struct LogicalPosition {
     /// The x coordinate.
     pub x: f32,
@@ -85,6 +88,11 @@ impl PhysicalPosition {
     pub(crate) fn to_euclid(&self) -> crate::graphics::euclid::default::Point2D<i32> {
         [self.x, self.y].into()
     }
+
+    #[cfg(feature = "ffi")]
+    pub(crate) fn from_euclid(p: crate::graphics::euclid::default::Point2D<i32>) -> Self {
+        Self::new(p.x as _, p.y as _)
+    }
 }
 
 /// The position of the window in either physical or logical pixels. This is used
@@ -109,6 +117,7 @@ impl WindowPosition {
 
 /// A size represented in the coordinate space of logical pixels. That is the space before applying
 /// a display device specific scale factor.
+#[repr(C)]
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct LogicalSize {
     /// The width in logical pixels.
@@ -141,6 +150,10 @@ impl LogicalSize {
 
     pub(crate) fn to_euclid(self) -> crate::lengths::LogicalSize {
         [self.width as _, self.height as _].into()
+    }
+
+    pub(crate) fn from_euclid(p: crate::lengths::LogicalSize) -> Self {
+        Self::new(p.width as _, p.height as _)
     }
 }
 
@@ -268,7 +281,7 @@ impl<'a> core::fmt::Debug for GraphicsAPI<'a> {
 /// This enum describes the different rendering states, that will be provided
 /// to the parameter of the callback for `set_rendering_notifier` on the `slint::Window`.
 #[derive(Debug, Clone)]
-#[repr(C)]
+#[repr(u8)]
 #[non_exhaustive]
 pub enum RenderingState {
     /// The window has been created and the graphics adapter/context initialized. When OpenGL
@@ -302,7 +315,7 @@ impl<F: FnMut(RenderingState, &GraphicsAPI)> RenderingNotifier for F {
 /// This enum describes the different error scenarios that may occur when the application
 /// registers a rendering notifier on a `slint::Window`.
 #[derive(Debug, Clone)]
-#[repr(C)]
+#[repr(u8)]
 #[non_exhaustive]
 pub enum SetRenderingNotifierError {
     /// The rendering backend does not support rendering notifiers.
@@ -320,7 +333,7 @@ pub struct Window(pub(crate) WindowInner);
 /// This enum describes whether a Window is allowed to be hidden when the user tries to close the window.
 /// It is the return type of the callback provided to [Window::on_close_requested].
 #[derive(Copy, Clone, Debug, PartialEq, Default)]
-#[repr(C)]
+#[repr(u8)]
 pub enum CloseRequestResponse {
     /// The Window will be hidden (default action)
     #[default]
@@ -332,8 +345,7 @@ pub enum CloseRequestResponse {
 impl Window {
     /// Create a new window from a window adapter
     ///
-    /// You only need to create the window yourself when you create a
-    /// [`WindowAdapter`](crate::platform::WindowAdapter) from
+    /// You only need to create the window yourself when you create a [`WindowAdapter`] from
     /// [`Platform::create_window_adapter`](crate::platform::Platform::create_window_adapter)
     ///
     /// Since the window adapter must own the Window, this function is meant to be used with
@@ -367,12 +379,18 @@ impl Window {
         Self(WindowInner::new(window_adapter_weak))
     }
 
-    /// Registers the window with the windowing system in order to make it visible on the screen.
+    /// Shows the window on the screen. An additional strong reference on the
+    /// associated component is maintained while the window is visible.
+    ///
+    /// Call [`Self::hide()`] to make the window invisible again, and drop the additional
+    /// strong reference.
     pub fn show(&self) -> Result<(), PlatformError> {
         self.0.show()
     }
 
-    /// De-registers the window from the windowing system, therefore hiding it.
+    /// Hides the window, so that it is not visible anymore. The additional strong
+    /// reference on the associated component, that was created when [`Self::show()`] was called, is
+    /// dropped.
     pub fn hide(&self) -> Result<(), PlatformError> {
         self.0.hide()
     }
@@ -430,6 +448,36 @@ impl Window {
         crate::window::WindowAdapter::set_size(&*self.0.window_adapter(), size);
     }
 
+    /// Returns if the window is currently fullscreen
+    pub fn is_fullscreen(&self) -> bool {
+        self.0.is_fullscreen()
+    }
+
+    /// Set or unset the window to display fullscreen.
+    pub fn set_fullscreen(&self, fullscreen: bool) {
+        self.0.set_fullscreen(fullscreen);
+    }
+
+    /// Returns if the window is currently maximized
+    pub fn is_maximized(&self) -> bool {
+        self.0.is_maximized()
+    }
+
+    /// Maximize or unmaximize the window.
+    pub fn set_maximized(&self, maximized: bool) {
+        self.0.set_maximized(maximized);
+    }
+
+    /// Returns if the window is currently minimized
+    pub fn is_minimized(&self) -> bool {
+        self.0.is_minimized()
+    }
+
+    /// Minimize or unminimze the window.
+    pub fn set_minimized(&self, minimized: bool) {
+        self.0.set_minimized(minimized);
+    }
+
     /// Dispatch a window event to the scene.
     ///
     /// Use this when you're implementing your own backend and want to forward user input events.
@@ -461,8 +509,8 @@ impl Window {
             crate::platform::WindowEvent::PointerScrolled { position, delta_x, delta_y } => {
                 self.0.process_mouse_input(MouseEvent::Wheel {
                     position: position.to_euclid().cast(),
-                    delta_x,
-                    delta_y,
+                    delta_x: delta_x as _,
+                    delta_y: delta_y as _,
                 });
             }
             crate::platform::WindowEvent::PointerExited => {
@@ -470,14 +518,23 @@ impl Window {
             }
 
             crate::platform::WindowEvent::KeyPressed { text } => {
-                self.0.process_key_input(KeyInputEvent {
+                self.0.process_key_input(crate::input::KeyEvent {
                     text,
+                    repeat: false,
+                    event_type: KeyEventType::KeyPressed,
+                    ..Default::default()
+                })
+            }
+            crate::platform::WindowEvent::KeyPressRepeated { text } => {
+                self.0.process_key_input(crate::input::KeyEvent {
+                    text,
+                    repeat: true,
                     event_type: KeyEventType::KeyPressed,
                     ..Default::default()
                 })
             }
             crate::platform::WindowEvent::KeyReleased { text } => {
-                self.0.process_key_input(KeyInputEvent {
+                self.0.process_key_input(crate::input::KeyEvent {
                     text,
                     event_type: KeyEventType::KeyReleased,
                     ..Default::default()
@@ -494,6 +551,12 @@ impl Window {
                     .resize(size.to_physical(self.scale_factor()))
                     .unwrap()
             }
+            crate::platform::WindowEvent::CloseRequested => {
+                if self.0.request_close() {
+                    self.hide().unwrap();
+                }
+            }
+            crate::platform::WindowEvent::WindowActiveChanged(bool) => self.0.set_active(bool),
         }
     }
 
@@ -506,11 +569,7 @@ impl Window {
     /// Returns the visibility state of the window. This function can return false even if you previously called show()
     /// on it, for example if the user minimized the window.
     pub fn is_visible(&self) -> bool {
-        self.0
-            .window_adapter()
-            .internal(crate::InternalToken)
-            .map(|w| w.is_visible())
-            .unwrap_or(false)
+        self.0.is_visible()
     }
 }
 
@@ -577,16 +636,18 @@ pub trait ComponentHandle {
 
     /// Internal function used when upgrading a weak reference to a strong one.
     #[doc(hidden)]
-    fn from_inner(_: vtable::VRc<ComponentVTable, Self::Inner>) -> Self;
+    fn from_inner(_: vtable::VRc<ItemTreeVTable, Self::Inner>) -> Self;
 
-    /// Marks the window of this component to be shown on the screen. This registers
-    /// the window with the windowing system. In order to react to events from the windowing system,
-    /// such as draw requests or mouse/touch input, it is still necessary to spin the event loop,
+    /// Convenience function for [`crate::Window::show()`](struct.Window.html#method.show).
+    /// This shows the window on the screen and maintains an extra strong reference while
+    /// the window is visible. To react to events from the windowing system, such as draw
+    /// requests or mouse/touch input, it is still necessary to spin the event loop,
     /// using [`crate::run_event_loop`](fn.run_event_loop.html).
     fn show(&self) -> Result<(), PlatformError>;
 
-    /// Marks the window of this component to be hidden on the screen. This de-registers
-    /// the window from the windowing system and it will not receive any further events.
+    /// Convenience function for [`crate::Window::hide()`](struct.Window.html#method.hide).
+    /// Hides the window, so that it is not visible anymore. The additional strong reference
+    /// on the associated component, that was created when show() was called, is dropped.
     fn hide(&self) -> Result<(), PlatformError>;
 
     /// Returns the Window associated with this component. The window API can be used
@@ -622,7 +683,7 @@ mod weak_handle {
     /// as the one it has been created from.
     /// This is useful to use with [`invoke_from_event_loop()`] or [`Self::upgrade_in_event_loop()`].
     pub struct Weak<T: ComponentHandle> {
-        inner: vtable::VWeak<ComponentVTable, T::Inner>,
+        inner: vtable::VWeak<ItemTreeVTable, T::Inner>,
         #[cfg(feature = "std")]
         thread: std::thread::ThreadId,
     }
@@ -649,7 +710,7 @@ mod weak_handle {
 
     impl<T: ComponentHandle> Weak<T> {
         #[doc(hidden)]
-        pub fn new(rc: &vtable::VRc<ComponentVTable, T::Inner>) -> Self {
+        pub fn new(rc: &vtable::VRc<ItemTreeVTable, T::Inner>) -> Self {
             Self {
                 inner: vtable::VRc::downgrade(rc),
                 #[cfg(feature = "std")]
@@ -677,13 +738,20 @@ mod weak_handle {
         /// some other instance still holds a strong reference and the current thread
         /// is the thread that created this component.
         /// Otherwise, this function panics.
+        #[track_caller]
         pub fn unwrap(&self) -> T {
-            self.upgrade().unwrap()
+            #[cfg(feature = "std")]
+            if std::thread::current().id() != self.thread {
+                panic!(
+                    "Trying to upgrade a Weak from a different thread than the one it belongs to"
+                );
+            }
+            T::from_inner(self.inner.upgrade().expect("The Weak doesn't hold a valid component"))
         }
 
         /// A helper function to allow creation on `component_factory::Component` from
         /// a `ComponentHandle`
-        pub(crate) fn inner(&self) -> vtable::VWeak<ComponentVTable, T::Inner> {
+        pub(crate) fn inner(&self) -> vtable::VWeak<ItemTreeVTable, T::Inner> {
             self.inner.clone()
         }
 
@@ -802,7 +870,7 @@ impl core::fmt::Display for EventLoopError {
                 f.write_str("The event loop was already terminated")
             }
             EventLoopError::NoEventLoopProvider => {
-                f.write_str("The Slint platform do not provide an event loop")
+                f.write_str("The Slint platform does not provide an event loop")
             }
         }
     }
@@ -839,7 +907,7 @@ pub enum PlatformError {
     Other(String),
     /// Another platform-specific error occurred.
     #[cfg(feature = "std")]
-    OtherError(Box<dyn std::error::Error>),
+    OtherError(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl core::fmt::Display for PlatformError {
@@ -849,7 +917,7 @@ impl core::fmt::Display for PlatformError {
                 "No default Slint platform was selected, and no Slint platform was initialized",
             ),
             PlatformError::NoEventLoopProvider => {
-                f.write_str("The Slint platform do not provide an event loop")
+                f.write_str("The Slint platform does not provide an event loop")
             }
             PlatformError::SetPlatformError(_) => {
                 f.write_str("The Slint platform was initialized in another thread")
@@ -873,8 +941,8 @@ impl From<&str> for PlatformError {
 }
 
 #[cfg(feature = "std")]
-impl From<Box<dyn std::error::Error>> for PlatformError {
-    fn from(error: Box<dyn std::error::Error>) -> Self {
+impl From<Box<dyn std::error::Error + Send + Sync>> for PlatformError {
+    fn from(error: Box<dyn std::error::Error + Send + Sync>) -> Self {
         Self::OtherError(error)
     }
 }
@@ -887,4 +955,10 @@ impl std::error::Error for PlatformError {
             _ => None,
         }
     }
+}
+
+#[test]
+#[cfg(feature = "std")]
+fn error_is_send() {
+    let _: Box<dyn std::error::Error + Send + Sync + 'static> = PlatformError::NoPlatform.into();
 }

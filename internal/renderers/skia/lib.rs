@@ -13,6 +13,7 @@ use i_slint_core::api::{
 };
 use i_slint_core::graphics::euclid::{self, Vector2D};
 use i_slint_core::graphics::rendering_metrics_collector::RenderingMetricsCollector;
+use i_slint_core::graphics::BorderRadius;
 use i_slint_core::graphics::FontRequest;
 use i_slint_core::item_rendering::{ItemCache, ItemRenderer};
 use i_slint_core::lengths::{
@@ -26,10 +27,14 @@ type PhysicalLength = euclid::Length<f32, PhysicalPx>;
 type PhysicalRect = euclid::Rect<f32, PhysicalPx>;
 type PhysicalSize = euclid::Size2D<f32, PhysicalPx>;
 type PhysicalPoint = euclid::Point2D<f32, PhysicalPx>;
+type PhysicalBorderRadius = BorderRadius<f32, PhysicalPx>;
 
 mod cached_image;
 mod itemrenderer;
 mod textlayout;
+
+#[cfg(skia_backend_software)]
+pub mod software_surface;
 
 #[cfg(target_os = "macos")]
 pub mod metal_surface;
@@ -40,8 +45,9 @@ pub mod d3d_surface;
 #[cfg(skia_backend_vulkan)]
 pub mod vulkan_surface;
 
-#[cfg(skia_backend_opengl)]
 pub mod opengl_surface;
+
+pub use skia_safe;
 
 cfg_if::cfg_if! {
     if #[cfg(skia_backend_vulkan)] {
@@ -55,6 +61,27 @@ cfg_if::cfg_if! {
     }
 }
 
+fn create_default_surface(
+    window_handle: raw_window_handle::WindowHandle<'_>,
+    display_handle: raw_window_handle::DisplayHandle<'_>,
+    size: PhysicalWindowSize,
+) -> Result<Box<dyn Surface>, PlatformError> {
+    match DefaultSurface::new(window_handle.clone(), display_handle.clone(), size) {
+        Ok(gpu_surface) => Ok(Box::new(gpu_surface) as Box<dyn Surface>),
+        #[cfg(skia_backend_software)]
+        Err(err) => {
+            i_slint_core::debug_log!(
+                "Failed to initialize Skia GPU renderer: {} . Falling back to software rendering",
+                err
+            );
+            software_surface::SoftwareSurface::new(window_handle, display_handle, size)
+                .map(|r| Box::new(r) as Box<dyn Surface>)
+        }
+        #[cfg(not(skia_backend_software))]
+        Err(err) => Err(err),
+    }
+}
+
 /// Use the SkiaRenderer when implementing a custom Slint platform where you deliver events to
 /// Slint and want the scene to be rendered using Skia as underlying graphics library.
 pub struct SkiaRenderer {
@@ -64,19 +91,76 @@ pub struct SkiaRenderer {
     path_cache: ItemCache<Option<(Vector2D<f32, PhysicalPx>, skia_safe::Path)>>,
     rendering_metrics_collector: RefCell<Option<Rc<RenderingMetricsCollector>>>,
     rendering_first_time: Cell<bool>,
-    surface: Box<dyn Surface>,
+    surface: RefCell<Option<Box<dyn Surface>>>,
+    surface_factory: fn(
+        window_handle: raw_window_handle::WindowHandle<'_>,
+        display_handle: raw_window_handle::DisplayHandle<'_>,
+        size: PhysicalWindowSize,
+    ) -> Result<Box<dyn Surface>, PlatformError>,
+    pre_present_callback: RefCell<Option<Box<dyn FnMut()>>>,
+}
+
+impl Default for SkiaRenderer {
+    fn default() -> Self {
+        Self {
+            maybe_window_adapter: Default::default(),
+            rendering_notifier: Default::default(),
+            image_cache: Default::default(),
+            path_cache: Default::default(),
+            rendering_metrics_collector: Default::default(),
+            rendering_first_time: Default::default(),
+            surface: Default::default(),
+            surface_factory: create_default_surface,
+            pre_present_callback: Default::default(),
+        }
+    }
 }
 
 impl SkiaRenderer {
+    #[cfg(skia_backend_software)]
+    /// Creates a new SkiaRenderer that will always use Skia's software renderer.
+    pub fn default_software() -> Self {
+        Self {
+            maybe_window_adapter: Default::default(),
+            rendering_notifier: Default::default(),
+            image_cache: Default::default(),
+            path_cache: Default::default(),
+            rendering_metrics_collector: Default::default(),
+            rendering_first_time: Default::default(),
+            surface: Default::default(),
+            surface_factory: |window_handle, display_handle, size| {
+                software_surface::SoftwareSurface::new(window_handle, display_handle, size)
+                    .map(|r| Box::new(r) as Box<dyn Surface>)
+            },
+            pre_present_callback: Default::default(),
+        }
+    }
+
+    /// Creates a new SkiaRenderer that will always use Skia's OpenGL renderer.
+    pub fn default_opengl() -> Self {
+        Self {
+            maybe_window_adapter: Default::default(),
+            rendering_notifier: Default::default(),
+            image_cache: Default::default(),
+            path_cache: Default::default(),
+            rendering_metrics_collector: Default::default(),
+            rendering_first_time: Default::default(),
+            surface: Default::default(),
+            surface_factory: |window_handle, display_handle, size| {
+                opengl_surface::OpenGLSurface::new(window_handle, display_handle, size)
+                    .map(|r| Box::new(r) as Box<dyn Surface>)
+            },
+            pre_present_callback: Default::default(),
+        }
+    }
+
     /// Creates a new renderer is associated with the provided window adapter.
     pub fn new(
         window_handle: raw_window_handle::WindowHandle<'_>,
         display_handle: raw_window_handle::DisplayHandle<'_>,
         size: PhysicalWindowSize,
     ) -> Result<Self, PlatformError> {
-        let surface = DefaultSurface::new(window_handle, display_handle, size)?;
-
-        Ok(Self::new_with_surface(surface))
+        Ok(Self::new_with_surface(create_default_surface(window_handle, display_handle, size)?))
     }
 
     pub fn surface(&self) -> &dyn Surface {
@@ -84,7 +168,7 @@ impl SkiaRenderer {
     }
 
     /// Creates a new renderer with the given surface trait implementation.
-    pub fn new_with_surface(surface: impl Surface + 'static) -> Self {
+    pub fn new_with_surface(surface: Box<dyn Surface + 'static>) -> Self {
         Self {
             maybe_window_adapter: Default::default(),
             rendering_notifier: Default::default(),
@@ -92,29 +176,59 @@ impl SkiaRenderer {
             path_cache: Default::default(),
             rendering_metrics_collector: Default::default(),
             rendering_first_time: Cell::new(true),
-            surface: Box::new(surface),
+            surface: RefCell::new(Some(surface)),
+            surface_factory: |_, _, _| {
+                Err("Skia renderer constructed with surface does not support dynamic surface re-creation".into())
+            },
+            pre_present_callback: Default::default(),
         }
+    }
+
+    /// Reset the surface to a new surface. (destroy the previously set surface if any)
+    pub fn set_surface(&self, surface: Box<dyn Surface + 'static>) {
+        self.image_cache.clear_all();
+        self.path_cache.clear_all();
+        self.rendering_first_time.set(true);
+        *self.surface.borrow_mut() = Some(surface);
+    }
+
+    /// Reset the surface to the window given the window handle
+    pub fn set_window_handle(
+        &self,
+        window_handle: raw_window_handle::WindowHandle<'_>,
+        display_handle: raw_window_handle::DisplayHandle<'_>,
+        size: PhysicalWindowSize,
+    ) -> Result<(), PlatformError> {
+        self.set_surface((self.surface_factory)(window_handle, display_handle, size)?);
+        Ok(())
     }
 
     /// Render the scene in the previously associated window.
     pub fn render(&self) -> Result<(), i_slint_core::platform::PlatformError> {
-        self.internal_render_with_post_callback(None)
+        let window_adapter = self.window_adapter()?;
+        let size = window_adapter.window().size();
+        self.internal_render_with_post_callback(0., (0., 0.), size, None)
     }
 
     fn internal_render_with_post_callback(
         &self,
+        rotation_angle_degrees: f32,
+        translation: (f32, f32),
+        surace_size: PhysicalWindowSize,
         post_render_cb: Option<&dyn Fn(&mut dyn ItemRenderer)>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
+        let surface = self.surface.borrow();
+        let Some(surface) = surface.as_ref() else { return Ok(()) };
         if self.rendering_first_time.take() {
             *self.rendering_metrics_collector.borrow_mut() =
                 RenderingMetricsCollector::new(&format!(
                     "Skia renderer (skia backend {}; surface: {} bpp)",
-                    self.surface.name(),
-                    self.surface.bits_per_pixel()?
+                    surface.name(),
+                    surface.bits_per_pixel()?
                 ));
 
             if let Some(callback) = self.rendering_notifier.borrow_mut().as_mut() {
-                self.surface.with_graphics_api(&mut |api| {
+                surface.with_graphics_api(&mut |api| {
                     callback.notify(RenderingState::RenderingSetup, &api)
                 })
             }
@@ -122,80 +236,94 @@ impl SkiaRenderer {
 
         let window_adapter = self.window_adapter()?;
         let window = window_adapter.window();
-        let size = window.size();
         let window_inner = WindowInner::from_pub(window);
 
-        self.surface.render(size, &|skia_canvas, gr_context| {
-            window_inner.draw_contents(|components| {
-                let window_background_brush =
-                    window_inner.window_item().map(|w| w.as_pin_ref().background());
+        surface.render(
+            surace_size,
+            &|skia_canvas, mut gr_context| {
+                skia_canvas.rotate(rotation_angle_degrees, None);
+                skia_canvas.translate(translation);
 
-                // Clear with window background if it is a solid color otherwise it will drawn as gradient
-                if let Some(Brush::SolidColor(clear_color)) = window_background_brush {
-                    skia_canvas.clear(itemrenderer::to_skia_color(&clear_color));
-                }
+                window_inner.draw_contents(|components| {
+                    let window_background_brush =
+                        window_inner.window_item().map(|w| w.as_pin_ref().background());
 
-                if let Some(callback) = self.rendering_notifier.borrow_mut().as_mut() {
-                    // For the BeforeRendering rendering notifier callback it's important that this happens *after* clearing
-                    // the back buffer, in order to allow the callback to provide its own rendering of the background.
-                    // Skia's clear() will merely schedule a clear call, so flush right away to make it immediate.
-                    gr_context.flush(None);
+                    // Clear with window background if it is a solid color otherwise it will drawn as gradient
+                    if let Some(Brush::SolidColor(clear_color)) = window_background_brush {
+                        skia_canvas.clear(itemrenderer::to_skia_color(&clear_color));
+                    }
 
-                    self.surface.with_graphics_api(&mut |api| {
-                        callback.notify(RenderingState::BeforeRendering, &api)
-                    })
-                }
+                    if let Some(callback) = self.rendering_notifier.borrow_mut().as_mut() {
+                        // For the BeforeRendering rendering notifier callback it's important that this happens *after* clearing
+                        // the back buffer, in order to allow the callback to provide its own rendering of the background.
+                        // Skia's clear() will merely schedule a clear call, so flush right away to make it immediate.
+                        if let Some(ctx) = gr_context.as_mut() {
+                            ctx.flush(None);
+                        }
 
-                let mut box_shadow_cache = Default::default();
+                        surface.with_graphics_api(&mut |api| {
+                            callback.notify(RenderingState::BeforeRendering, &api)
+                        })
+                    }
 
-                let mut item_renderer = itemrenderer::SkiaItemRenderer::new(
-                    skia_canvas,
-                    window,
-                    &self.image_cache,
-                    &self.path_cache,
-                    &mut box_shadow_cache,
-                );
+                    let mut box_shadow_cache = Default::default();
 
-                // Draws the window background as gradient
-                match window_background_brush {
-                    Some(Brush::SolidColor(..)) | None => {}
-                    Some(brush @ _) => {
-                        item_renderer.draw_rect(
-                            i_slint_core::lengths::logical_size_from_api(
-                                size.to_logical(window_inner.scale_factor()),
-                            ),
-                            brush,
+                    self.image_cache.clear_cache_if_scale_factor_changed(window);
+                    self.path_cache.clear_cache_if_scale_factor_changed(window);
+
+                    let mut item_renderer = itemrenderer::SkiaItemRenderer::new(
+                        skia_canvas,
+                        window,
+                        &self.image_cache,
+                        &self.path_cache,
+                        &mut box_shadow_cache,
+                    );
+
+                    // Draws the window background as gradient
+                    match window_background_brush {
+                        Some(Brush::SolidColor(..)) | None => {}
+                        Some(brush @ _) => {
+                            item_renderer.draw_rect(
+                                i_slint_core::lengths::logical_size_from_api(
+                                    window.size().to_logical(window_inner.scale_factor()),
+                                ),
+                                brush,
+                            );
+                        }
+                    }
+
+                    for (component, origin) in components {
+                        i_slint_core::item_rendering::render_component_items(
+                            component,
+                            &mut item_renderer,
+                            *origin,
                         );
                     }
+
+                    if let Some(collector) = &self.rendering_metrics_collector.borrow_mut().as_ref()
+                    {
+                        collector.measure_frame_rendered(&mut item_renderer);
+                    }
+
+                    if let Some(cb) = post_render_cb.as_ref() {
+                        cb(&mut item_renderer)
+                    }
+
+                    drop(item_renderer);
+
+                    if let Some(ctx) = gr_context.as_mut() {
+                        ctx.flush(None);
+                    }
+                });
+
+                if let Some(callback) = self.rendering_notifier.borrow_mut().as_mut() {
+                    surface.with_graphics_api(&mut |api| {
+                        callback.notify(RenderingState::AfterRendering, &api)
+                    })
                 }
-
-                for (component, origin) in components {
-                    i_slint_core::item_rendering::render_component_items(
-                        component,
-                        &mut item_renderer,
-                        *origin,
-                    );
-                }
-
-                if let Some(collector) = &self.rendering_metrics_collector.borrow_mut().as_ref() {
-                    collector.measure_frame_rendered(&mut item_renderer);
-                }
-
-                if let Some(cb) = post_render_cb.as_ref() {
-                    cb(&mut item_renderer)
-                }
-
-                drop(item_renderer);
-
-                gr_context.flush(None);
-            });
-
-            if let Some(callback) = self.rendering_notifier.borrow_mut().as_mut() {
-                self.surface.with_graphics_api(&mut |api| {
-                    callback.notify(RenderingState::AfterRendering, &api)
-                })
-            }
-        })
+            },
+            &self.pre_present_callback,
+        )
     }
 
     fn window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
@@ -204,6 +332,12 @@ impl SkiaRenderer {
             .as_ref()
             .and_then(|w| w.upgrade())
             .ok_or_else(|| format!("Renderer must be associated with component before use").into())
+    }
+
+    /// Sets the specified callback, that's invoked before presenting the rendered buffer to the windowing system.
+    /// This can be useful to implement frame throttling, i.e. for requesting a frame callback from the wayland compositor.
+    pub fn set_pre_present_callback(&self, callback: Option<Box<dyn FnMut()>>) {
+        *self.pre_present_callback.borrow_mut() = callback;
     }
 }
 
@@ -221,6 +355,7 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
             text,
             None,
             max_width.map(|w| w * scale_factor),
+            Default::default(),
             Default::default(),
             Default::default(),
             Default::default(),
@@ -258,6 +393,7 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
             max_height,
             text_input.horizontal_alignment(),
             text_input.vertical_alignment(),
+            text_input.wrap(),
             i_slint_core::items::TextOverflow::Clip,
             None,
         );
@@ -305,6 +441,7 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
             max_height,
             text_input.horizontal_alignment(),
             text_input.vertical_alignment(),
+            text_input.wrap(),
             i_slint_core::items::TextOverflow::Clip,
             None,
         );
@@ -314,6 +451,7 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
             byte_offset,
             layout,
             text_input.text_cursor_width() * scale_factor,
+            text_input.horizontal_alignment(),
         );
 
         physical_cursor_rect.translate(layout_top_left.to_vector()) / scale_factor
@@ -337,7 +475,9 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
         &self,
         callback: Box<dyn RenderingNotifier>,
     ) -> std::result::Result<(), SetRenderingNotifierError> {
-        if !self.surface.supports_graphics_api() {
+        if !self.surface.borrow().as_ref().map_or(DefaultSurface::supports_graphics_api(), |x| {
+            x.supports_graphics_api_with_self()
+        }) {
             return Err(SetRenderingNotifierError::Unsupported);
         }
         let mut notifier = self.rendering_notifier.borrow_mut();
@@ -354,7 +494,7 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
 
     fn free_graphics_resources(
         &self,
-        component: i_slint_core::component::ComponentRef,
+        component: i_slint_core::item_tree::ItemTreeRef,
         _items: &mut dyn Iterator<Item = std::pin::Pin<i_slint_core::items::ItemRef<'_>>>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
         self.image_cache.component_destroyed(component);
@@ -369,20 +509,26 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
     }
 
     fn resize(&self, size: i_slint_core::api::PhysicalSize) -> Result<(), PlatformError> {
-        self.surface.resize_event(size)
+        if let Some(surface) = self.surface.borrow().as_ref() {
+            surface.resize_event(size)
+        } else {
+            Ok(())
+        }
     }
 }
 
 impl Drop for SkiaRenderer {
     fn drop(&mut self) {
-        if let Some(callback) = self.rendering_notifier.borrow_mut().as_mut() {
-            self.surface
-                .with_active_surface(&mut || {
-                    self.surface.with_graphics_api(&mut |api| {
-                        callback.notify(RenderingState::RenderingTeardown, &api)
+        if let Some(surface) = self.surface.borrow().as_ref() {
+            if let Some(callback) = self.rendering_notifier.borrow_mut().as_mut() {
+                surface
+                    .with_active_surface(&mut || {
+                        surface.with_graphics_api(&mut |api| {
+                            callback.notify(RenderingState::RenderingTeardown, &api)
+                        })
                     })
-                })
-                .ok();
+                    .ok();
+            }
         }
     }
 }
@@ -402,9 +548,17 @@ pub trait Surface {
     fn name(&self) -> &'static str;
     /// Returns true if the surface supports exposing its platform specific API via the GraphicsAPI struct
     /// and the `with_graphics_api` function.
-    fn supports_graphics_api(&self) -> bool {
+    fn supports_graphics_api() -> bool
+    where
+        Self: Sized,
+    {
         false
     }
+
+    fn supports_graphics_api_with_self(&self) -> bool {
+        false
+    }
+
     /// If supported, this invokes the specified callback with access to the platform graphics API.
     fn with_graphics_api(&self, _callback: &mut dyn FnMut(GraphicsAPI<'_>)) {}
     /// Invokes the callback with the surface active. This has only a meaning for OpenGL rendering, where
@@ -421,7 +575,8 @@ pub trait Surface {
     fn render(
         &self,
         size: PhysicalWindowSize,
-        callback: &dyn Fn(&mut skia_safe::Canvas, &mut skia_safe::gpu::DirectContext),
+        render_callback: &dyn Fn(&skia_safe::Canvas, Option<&mut skia_safe::gpu::DirectContext>),
+        pre_present_callback: &RefCell<Option<Box<dyn FnMut()>>>,
     ) -> Result<(), i_slint_core::platform::PlatformError>;
     /// Called when the surface should be resized.
     fn resize_event(
@@ -437,17 +592,28 @@ pub trait Surface {
 }
 
 pub trait SkiaRendererExt {
-    fn render_with_post_callback(
+    fn render_transformed_with_post_callback(
         &self,
+        rotation_angle_degrees: f32,
+        translation: (f32, f32),
+        surface_size: PhysicalWindowSize,
         post_render_cb: Option<&dyn Fn(&mut dyn ItemRenderer)>,
     ) -> Result<(), i_slint_core::platform::PlatformError>;
 }
 
 impl SkiaRendererExt for SkiaRenderer {
-    fn render_with_post_callback(
+    fn render_transformed_with_post_callback(
         &self,
+        rotation_angle_degrees: f32,
+        translation: (f32, f32),
+        surface_size: PhysicalWindowSize,
         post_render_cb: Option<&dyn Fn(&mut dyn ItemRenderer)>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
-        self.internal_render_with_post_callback(post_render_cb)
+        self.internal_render_with_post_callback(
+            rotation_angle_degrees,
+            translation,
+            surface_size,
+            post_render_cb,
+        )
     }
 }

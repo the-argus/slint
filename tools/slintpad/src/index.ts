@@ -1,9 +1,9 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-// cSpell: ignore lumino permalink
+// cSpell: ignore cupertino lumino permalink
 
-import { EditorWidget } from "./editor_widget";
+import { EditorWidget, initialize as initializeEditor } from "./editor_widget";
 import { LspWaiter, Lsp } from "./lsp";
 import { LspRange, LspPosition } from "./lsp_integration";
 import { OutlineWidget } from "./outline_widget";
@@ -34,34 +34,6 @@ import {
     Widget,
 } from "@lumino/widgets";
 
-function resolveControllerReady(
-    resolve: () => void,
-    reject: () => void,
-    count: number,
-) {
-    count += 1;
-    if (count >= 5) {
-        // Force a reload! We do not have any state yet, so we do not need to
-        // be creative to make the browser notice that we have an active
-        // service worker.
-        window.location.reload();
-    }
-    if (!navigator.serviceWorker) {
-        reject();
-    } else if (navigator.serviceWorker.controller) {
-        console.info(`Controller ready after ${count} attempts`);
-        resolve();
-    } else {
-        setTimeout(() => {
-            resolveControllerReady(resolve, reject, count);
-        }, 500);
-    }
-}
-
-function wait_for_service_worker(): Promise<void> {
-    return new Promise((res, rej) => resolveControllerReady(res, rej, 0));
-}
-
 const lsp_waiter = new LspWaiter();
 
 const commands = new CommandRegistry();
@@ -85,34 +57,6 @@ function create_demo_menu(editor: EditorWidget): Menu {
     return menu;
 }
 
-function create_style_menu(editor: EditorWidget): Menu {
-    const menu = new Menu({ commands });
-    menu.title.label = "Style";
-
-    for (const style of [
-        { label: "Fluent", name: "fluent" },
-        { label: "Fluent Light", name: "fluent-light" },
-        { label: "Fluent Dark", name: "fluent-dark" },
-        { label: "Material", name: "material" },
-        { label: "Material Light", name: "material-light" },
-        { label: "Material Dark", name: "material-dark" },
-    ]) {
-        const command_name = "slint:set_style_" + style.name;
-        commands.addCommand(command_name, {
-            label: style.label,
-            isToggled: () => {
-                return editor.style === style.name;
-            },
-            execute: () => {
-                editor.style = style.name;
-            },
-        });
-        menu.addItem({ command: command_name });
-    }
-
-    return menu;
-}
-
 function create_settings_menu(): Menu {
     const menu = new Menu({ commands });
     menu.title.label = "Settings";
@@ -126,12 +70,14 @@ function create_settings_menu(): Menu {
     });
 
     menu.addItem({ command: "slint:store_github_token" });
-    menu.addItem({ command: "slint:auto_compile" });
 
     return menu;
 }
 
-function create_project_menu(editor: EditorWidget): Menu {
+function create_project_menu(
+    editor: EditorWidget,
+    preview: PreviewWidget,
+): Menu {
     const menu = new Menu({ commands });
     menu.title.label = "Project";
 
@@ -176,17 +122,18 @@ function create_project_menu(editor: EditorWidget): Menu {
     menu.addItem({ command: "slint:open_url" });
     menu.addItem({ type: "submenu", submenu: create_demo_menu(editor) });
     menu.addItem({ type: "separator" });
-    menu.addItem({ command: "slint:compile" });
-    menu.addItem({ type: "separator" });
     menu.addItem({ command: "slint:add_file" });
-    menu.addItem({ type: "submenu", submenu: create_share_menu(editor) });
+    menu.addItem({
+        type: "submenu",
+        submenu: create_share_menu(editor, preview),
+    });
     menu.addItem({ type: "separator" });
     menu.addItem({ type: "submenu", submenu: create_settings_menu() });
 
     return menu;
 }
 
-function create_share_menu(editor: EditorWidget): Menu {
+function create_share_menu(editor: EditorWidget, preview: PreviewWidget): Menu {
     const menu = new Menu({ commands });
     menu.title.label = "Share";
 
@@ -200,6 +147,7 @@ function create_share_menu(editor: EditorWidget): Menu {
         execute: () => {
             const params = new URLSearchParams();
             params.set("snippet", editor.current_editor_content);
+            params.set("style", preview.current_style());
             const this_url = new URL(window.location.toString());
             this_url.search = params.toString();
 
@@ -435,74 +383,23 @@ class DockWidgets {
     }
 }
 
+const url_params = new URLSearchParams(window.location.search);
+const url_style = url_params.get("style");
+
 function setup(lsp: Lsp) {
-    commands.addCommand("slint:compile", {
-        label: "Compile",
-        iconClass: "fa fa-magic",
-        mnemonic: 1,
-        execute: () => {
-            editor.compile();
-        },
-    });
-
-    commands.addCommand("slint:auto_compile", {
-        label: "Automatically Compile on Change",
-        mnemonic: 1,
-        isToggled: () => {
-            return editor.auto_compile;
-        },
-        execute: () => {
-            editor.auto_compile = !editor.auto_compile;
-        },
-    });
-
-    commands.addKeyBinding({
-        keys: ["Accel B"],
-        selector: "body",
-        command: "slint:compile",
-    });
-
     const editor = new EditorWidget(lsp);
+    const preview = new PreviewWidget(
+        lsp,
+        (url: string) => editor.map_url(url),
+        url_style ?? "",
+    );
+
     const dock = new DockPanel();
-
-    lsp.previewer.on_highlight_request = (
-        url: string,
-        start: { line: number; column: number },
-        _end: { line: number; column: number },
-    ) => {
-        if (url === "") {
-            return;
-        }
-
-        editor.goto_position(
-            url,
-            LspRange.create(
-                start.line - 1,
-                start.column - 1,
-                start.line - 1, // Highlight a position, not the entire range
-                start.column - 1,
-            ),
-        );
-    };
 
     const dock_widgets = new DockWidgets(
         dock,
         [
             () => {
-                const preview = new PreviewWidget(
-                    lsp.previewer,
-                    editor.internal_url_prefix,
-                );
-                editor.onRenderRequest = (
-                    style: string,
-                    source: string,
-                    url: string,
-                    fetcher: (_url: string) => Promise<string>,
-                ) => {
-                    return preview.render(style, source, url, fetcher);
-                };
-
-                commands.execute("slint:compile");
                 return preview;
             },
             {},
@@ -559,8 +456,7 @@ function setup(lsp: Lsp) {
 
     const menu_bar = new MenuBar();
     menu_bar.id = "menuBar";
-    menu_bar.addMenu(create_project_menu(editor));
-    menu_bar.addMenu(create_style_menu(editor));
+    menu_bar.addMenu(create_project_menu(editor, preview));
     menu_bar.addMenu(create_view_menu(dock_widgets));
 
     const main = new SplitPanel({ orientation: "horizontal" });
@@ -583,18 +479,26 @@ function setup(lsp: Lsp) {
 }
 
 function main() {
-    Promise.all([wait_for_service_worker(), lsp_waiter.wait_for_lsp()])
-        .then(([_sw, lsp]) => {
-            setup(lsp);
-            document.body.getElementsByClassName("loader")[0].remove();
+    initializeEditor()
+        .then((_) => {
+            lsp_waiter
+                .wait_for_lsp()
+                .then((lsp) => {
+                    setup(lsp);
+                    document.body.getElementsByClassName("loader")[0].remove();
+                })
+                .catch((e) => {
+                    console.info("LSP fail:", e);
+                    const div = document.createElement("div");
+                    div.className = "browser-error";
+                    div.innerHTML =
+                        "<p>Failed to start the slint language server</p>";
+                    document.body.getElementsByClassName("loader")[0].remove();
+                    document.body.appendChild(div);
+                });
         })
-        .catch(() => {
-            const div = document.createElement("div");
-            div.className = "browser-error";
-            div.innerHTML =
-                "<p>No ServiceWorker available in your browser. Try disabling private browsing mode.</p>";
-            document.body.getElementsByClassName("loader")[0].remove();
-            document.body.appendChild(div);
+        .catch((e) => {
+            console.info("Monaco fail:", e);
         });
 }
 

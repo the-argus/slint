@@ -155,7 +155,8 @@ impl WrappedCompiledComp {
     #[wasm_bindgen]
     pub fn run(&self, canvas_id: String) {
         let component = self.0.create_with_canvas_id(&canvas_id).unwrap();
-        component.run().unwrap();
+        component.show().unwrap();
+        slint_interpreter::spawn_event_loop().unwrap();
     }
     /// Creates this compiled component in a canvas, wrapped in a promise.
     /// The HTML must contains a <canvas> element with the given `canvas_id`
@@ -302,44 +303,6 @@ impl WrappedInstance {
             }
         }))
     }
-
-    /// THIS FUNCTION IS NOT PART THE PUBLIC API!
-    /// Highlights instances of the requested component
-    #[cfg(feature = "highlight")]
-    #[wasm_bindgen]
-    pub fn highlight(&self, _path: &str, _offset: u32) {
-        self.0.highlight(_path.into(), _offset);
-        let _ = slint_interpreter::invoke_from_event_loop(|| {}); // wake event loop
-    }
-
-    /// THIS FUNCTION IS NOT PART THE PUBLIC API!
-    /// Request information on what to highlight in the editor based on clicks in the UI
-    #[cfg(feature = "highlight")]
-    #[wasm_bindgen]
-    pub fn set_design_mode(&self, active: bool) {
-        self.0.set_design_mode(active);
-        let _ = slint_interpreter::invoke_from_event_loop(|| {}); // wake event loop
-    }
-
-    /// THIS FUNCTION IS NOT PART THE PUBLIC API!
-    /// Request information on what to highlight in the editor based on clicks in the UI
-    #[cfg(feature = "highlight")]
-    #[wasm_bindgen]
-    pub fn on_element_selected(&self, callback: CurrentElementInformationCallbackFunction) {
-        self.0.on_element_selected(Box::new(
-            move |url: &str, start_line: u32, start_column: u32, end_line: u32, end_column: u32| {
-                let args = js_sys::Array::of5(
-                    &url.into(),
-                    &start_line.into(),
-                    &start_column.into(),
-                    &end_line.into(),
-                    &end_column.into(),
-                );
-                let callback = js_sys::Function::from(callback.clone());
-                let _ = callback.apply(&JsValue::UNDEFINED, &args);
-            },
-        ));
-    }
 }
 
 /// Register DOM event handlers on all instance and set up the event loop for that.
@@ -347,6 +310,6 @@ impl WrappedInstance {
 /// to ignore.
 #[wasm_bindgen]
 pub fn run_event_loop() -> Result<(), JsValue> {
-    slint_interpreter::run_event_loop().map_err(|e| -> JsValue { format!("{e}").into() })?;
+    slint_interpreter::spawn_event_loop().map_err(|e| -> JsValue { format!("{e}").into() })?;
     Ok(())
 }

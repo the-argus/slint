@@ -9,13 +9,7 @@ use crate::items::{DialogButtonRole, LayoutAlignment};
 use crate::{slice::Slice, Coord, SharedVector};
 use alloc::vec::Vec;
 
-/// Vertical or Horizontal orientation
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-#[repr(u8)]
-pub enum Orientation {
-    Horizontal,
-    Vertical,
-}
+pub use crate::items::Orientation;
 
 /// The constraint that applies to an item
 // Also, the field needs to be in alphabetical order because how the generated code sort fields for struct
@@ -82,24 +76,29 @@ impl core::ops::Add for LayoutInfo {
 pub fn min_max_size_for_layout_constraints(
     constraints_horizontal: LayoutInfo,
     constraints_vertical: LayoutInfo,
-) -> (Option<crate::lengths::LogicalSize>, Option<crate::lengths::LogicalSize>) {
-    let min_width = constraints_horizontal.min.min(constraints_horizontal.max) as Coord;
-    let min_height = constraints_vertical.min.min(constraints_vertical.max) as Coord;
-    let max_width = constraints_horizontal.max.max(constraints_horizontal.min) as Coord;
-    let max_height = constraints_vertical.max.max(constraints_vertical.min) as Coord;
+) -> (Option<crate::api::LogicalSize>, Option<crate::api::LogicalSize>) {
+    let min_width = constraints_horizontal.min.min(constraints_horizontal.max) as f32;
+    let min_height = constraints_vertical.min.min(constraints_vertical.max) as f32;
+    let max_width = constraints_horizontal.max.max(constraints_horizontal.min) as f32;
+    let max_height = constraints_vertical.max.max(constraints_vertical.min) as f32;
 
-    let min_size = if min_width > 0 as Coord || min_height > 0 as Coord {
-        Some(crate::lengths::LogicalSize::new(min_width, min_height))
+    //cfg!(target_arch = "wasm32") is there because wasm32 winit don't like when max size is None:
+    // panicked at 'Property is read only: JsValue(NoModificationAllowedError: CSSStyleDeclaration.removeProperty: Can't remove property 'max-width' from computed style
+
+    let min_size = if min_width > 0. || min_height > 0. || cfg!(target_arch = "wasm32") {
+        Some(crate::api::LogicalSize::new(min_width, min_height))
     } else {
         None
     };
-    let max_size = if max_width > 0 as Coord
-        && max_height > 0 as Coord
-        && (max_width < i32::MAX as Coord || max_height < i32::MAX as Coord)
+
+    let max_size = if (max_width > 0.
+        && max_height > 0.
+        && (max_width < i32::MAX as f32 || max_height < i32::MAX as f32))
+        || cfg!(target_arch = "wasm32")
     {
         // maximum widget size for Qt and a workaround for the winit api not allowing partial constraints
-        let window_size_max = 16_777_215 as Coord;
-        Some(crate::lengths::LogicalSize::new(
+        let window_size_max = 16_777_215.;
+        Some(crate::api::LogicalSize::new(
             max_width.min(window_size_max),
             max_height.min(window_size_max),
         ))

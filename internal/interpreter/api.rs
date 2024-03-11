@@ -1,16 +1,17 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-use core::convert::TryFrom;
+use i_slint_compiler::diagnostics::SourceFileVersion;
 use i_slint_compiler::langtype::Type as LangType;
 use i_slint_core::component_factory::ComponentFactory;
-use i_slint_core::graphics::Image;
+#[cfg(feature = "internal")]
+use i_slint_core::component_factory::FactoryContext;
 use i_slint_core::model::{Model, ModelRc};
+#[cfg(feature = "internal")]
 use i_slint_core::window::WindowInner;
-use i_slint_core::{Brush, PathData, SharedVector};
+use i_slint_core::{PathData, SharedVector};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -18,9 +19,15 @@ use std::rc::Rc;
 pub use i_slint_compiler::diagnostics::{Diagnostic, DiagnosticLevel};
 
 pub use i_slint_core::api::*;
+// keep in sync with api/rs/slint/lib.rs
+pub use i_slint_core::graphics::{
+    Brush, Color, Image, LoadImageError, Rgb8Pixel, Rgba8Pixel, RgbaColor, SharedPixelBuffer,
+};
 use i_slint_core::items::*;
 
-use crate::dynamic_component::{ErasedComponentBox, WindowOptions};
+use crate::dynamic_item_tree::ErasedItemTreeBox;
+#[cfg(any(feature = "internal", target_arch = "wasm32"))]
+use crate::dynamic_item_tree::WindowOptions;
 
 /// This enum represents the different public variants of the [`Value`] enum, without
 /// the contained values.
@@ -390,16 +397,16 @@ impl TryFrom<Value> for () {
     }
 }
 
-impl From<i_slint_core::Color> for Value {
+impl From<Color> for Value {
     #[inline]
-    fn from(c: i_slint_core::Color) -> Self {
+    fn from(c: Color) -> Self {
         Value::Brush(Brush::SolidColor(c))
     }
 }
-impl TryFrom<Value> for i_slint_core::Color {
+impl TryFrom<Value> for Color {
     type Error = Value;
     #[inline]
-    fn try_from(v: Value) -> Result<i_slint_core::Color, Self::Error> {
+    fn try_from(v: Value) -> Result<Color, Self::Error> {
         match v {
             Value::Brush(Brush::SolidColor(c)) => Ok(c),
             _ => Err(v),
@@ -510,6 +517,18 @@ impl ComponentCompiler {
         Self::default()
     }
 
+    /// Allow access to the underlying `CompilerConfiguration`
+    ///
+    /// This is an internal function without and ABI or API stability guarantees.
+    #[doc(hidden)]
+    #[cfg(feature = "internal")]
+    pub fn compiler_configuration(
+        &mut self,
+        _: i_slint_core::InternalToken,
+    ) -> &mut i_slint_compiler::CompilerConfiguration {
+        &mut self.config
+    }
+
     /// Sets the include paths used for looking up `.slint` imports to the specified vector of paths.
     pub fn set_include_paths(&mut self, include_paths: Vec<std::path::PathBuf>) {
         self.config.include_paths = include_paths;
@@ -518,6 +537,16 @@ impl ComponentCompiler {
     /// Returns the include paths the component compiler is currently configured with.
     pub fn include_paths(&self) -> &Vec<std::path::PathBuf> {
         &self.config.include_paths
+    }
+
+    /// Sets the library paths used for looking up `@library` imports to the specified map of library names to paths.
+    pub fn set_library_paths(&mut self, library_paths: HashMap<String, PathBuf>) {
+        self.config.library_paths = library_paths;
+    }
+
+    /// Returns the library paths the component compiler is currently configured with.
+    pub fn library_paths(&self) -> &HashMap<String, PathBuf> {
+        &self.config.library_paths
     }
 
     /// Sets the style to be used for widgets.
@@ -602,7 +631,8 @@ impl ComponentCompiler {
 
         generativity::make_guard!(guard);
         let (c, diag) =
-            crate::dynamic_component::load(source, path.into(), self.config.clone(), guard).await;
+            crate::dynamic_item_tree::load(source, path.into(), None, self.config.clone(), guard)
+                .await;
         self.diagnostics = diag.into_iter().collect();
         c.ok().map(|inner| ComponentDefinition { inner: inner.into() })
     }
@@ -628,9 +658,47 @@ impl ComponentCompiler {
         source_code: String,
         path: PathBuf,
     ) -> Option<ComponentDefinition> {
+        self.build_from_versioned_source_impl(source_code, path, None).await
+    }
+
+    /// Compile some .slint code into a ComponentDefinition
+    ///
+    /// The `path` argument will be used for diagnostics and to compute relative
+    /// paths while importing, and the version of the `SourceFileInner` will be
+    /// set to `version`
+    ///
+    /// Any diagnostics produced during the compilation, such as warnings or errors, are collected
+    /// in this ComponentCompiler and can be retrieved after the call using the [`Self::diagnostics()`]
+    /// function. The [`print_diagnostics`] function can be used to display the diagnostics
+    /// to the users.
+    ///
+    /// Diagnostics from previous calls are cleared when calling this function.
+    ///
+    /// This function is `async` but in practice, this is only asynchronous if
+    /// [`Self::set_file_loader`] is set and its future is actually asynchronous.
+    /// If that is not used, then it is fine to use a very simple executor, such as the one
+    /// provided by the `spin_on` crate
+    #[doc(hidden)]
+    #[cfg(feature = "internal")]
+    pub async fn build_from_versioned_source(
+        &mut self,
+        source_code: String,
+        path: PathBuf,
+        version: SourceFileVersion,
+    ) -> Option<ComponentDefinition> {
+        self.build_from_versioned_source_impl(source_code, path, version).await
+    }
+
+    async fn build_from_versioned_source_impl(
+        &mut self,
+        source_code: String,
+        path: PathBuf,
+        version: SourceFileVersion,
+    ) -> Option<ComponentDefinition> {
         generativity::make_guard!(guard);
         let (c, diag) =
-            crate::dynamic_component::load(source_code, path, self.config.clone(), guard).await;
+            crate::dynamic_item_tree::load(source_code, path, version, self.config.clone(), guard)
+                .await;
         self.diagnostics = diag.into_iter().collect();
         c.ok().map(|inner| ComponentDefinition { inner: inner.into() })
     }
@@ -645,7 +713,7 @@ impl ComponentCompiler {
 /// creating the instances it is safe to drop the ComponentDefinition.
 #[derive(Clone)]
 pub struct ComponentDefinition {
-    inner: crate::dynamic_component::ErasedComponentDescription,
+    inner: crate::dynamic_item_tree::ErasedItemTreeDescription,
 }
 
 impl ComponentDefinition {
@@ -654,6 +722,19 @@ impl ComponentDefinition {
         generativity::make_guard!(guard);
         Ok(ComponentInstance {
             inner: self.inner.unerase(guard).clone().create(Default::default())?,
+        })
+    }
+
+    /// Creates a new instance of the component and returns a shared handle to it.
+    #[doc(hidden)]
+    #[cfg(feature = "internal")]
+    pub fn create_embedded(&self, ctx: FactoryContext) -> Result<ComponentInstance, PlatformError> {
+        generativity::make_guard!(guard);
+        Ok(ComponentInstance {
+            inner: self.inner.unerase(guard).clone().create(WindowOptions::Embed {
+                parent_item_tree: ctx.parent_item_tree,
+                parent_item_tree_index: ctx.parent_item_tree_index,
+            })?,
         })
     }
 
@@ -675,6 +756,7 @@ impl ComponentDefinition {
 
     /// Instantiate the component using an existing window.
     #[doc(hidden)]
+    #[cfg(feature = "internal")]
     pub fn create_with_existing_window(
         &self,
         window: &Window,
@@ -691,6 +773,7 @@ impl ComponentDefinition {
     ///
     /// This is internal because it exposes the `Type` from compilerlib.
     #[doc(hidden)]
+    #[cfg(feature = "internal")]
     pub fn properties_and_callbacks(
         &self,
     ) -> impl Iterator<Item = (String, i_slint_compiler::langtype::Type)> + '_ {
@@ -700,7 +783,7 @@ impl ComponentDefinition {
         self.inner.unerase(guard).properties()
     }
 
-    /// Returns an interator over all publicly declared properties. Each iterator item is a tuple of property name
+    /// Returns an iterator over all publicly declared properties. Each iterator item is a tuple of property name
     /// and property type for each of them.
     pub fn properties(&self) -> impl Iterator<Item = (String, ValueType)> + '_ {
         // We create here a 'static guard, because unfortunately the returned type would be restricted to the guard lifetime
@@ -744,6 +827,7 @@ impl ComponentDefinition {
     ///
     /// This is internal because it exposes the `Type` from compilerlib.
     #[doc(hidden)]
+    #[cfg(feature = "internal")]
     pub fn global_properties_and_callbacks(
         &self,
         global_name: &str,
@@ -796,6 +880,23 @@ impl ComponentDefinition {
         let guard = unsafe { generativity::Guard::new(generativity::Id::new()) };
         self.inner.unerase(guard).id()
     }
+
+    /// This gives access to the tree of Elements.
+    #[cfg(feature = "internal")]
+    #[doc(hidden)]
+    pub fn root_component(&self) -> Rc<i_slint_compiler::object_tree::Component> {
+        let guard = unsafe { generativity::Guard::new(generativity::Id::new()) };
+        self.inner.unerase(guard).original.clone()
+    }
+
+    /// Return the `TypeLoader` used when parsing the code in the interpreter.
+    ///
+    /// WARNING: this is not part of the public API
+    #[cfg(feature = "highlight")]
+    pub fn type_loader(&self) -> std::rc::Rc<i_slint_compiler::typeloader::TypeLoader> {
+        let guard = unsafe { generativity::Guard::new(generativity::Id::new()) };
+        self.inner.unerase(guard).type_loader.get().unwrap().clone()
+    }
 }
 
 /// Print the diagnostics to stderr
@@ -821,7 +922,7 @@ pub fn print_diagnostics(diagnostics: &[Diagnostic]) {
 /// An instance can be put on screen with the [`ComponentInstance::run`] function.
 #[repr(C)]
 pub struct ComponentInstance {
-    inner: crate::dynamic_component::DynamicComponentVRc,
+    inner: crate::dynamic_item_tree::DynamicComponentVRc,
 }
 
 impl ComponentInstance {
@@ -872,7 +973,7 @@ impl ComponentInstance {
             .map_err(|()| GetPropertyError::NoSuchProperty)
     }
 
-    /// Set the value for a public property of this component
+    /// Set the value for a public property of this component.
     pub fn set_property(&self, name: &str, value: Value) -> Result<(), SetPropertyError> {
         let name = normalize_identifier(name);
         generativity::make_guard!(guard);
@@ -1093,36 +1194,44 @@ impl ComponentInstance {
         }
     }
 
-    /// Highlight the elements which are pointed by a given source location.
+    /// Find all positions of the components which are pointed by a given source location.
     ///
     /// WARNING: this is not part of the public API
     #[cfg(feature = "highlight")]
-    pub fn highlight(&self, path: PathBuf, offset: u32) {
-        crate::highlight::highlight(&self.inner, path, offset);
+    pub fn component_positions(
+        &self,
+        path: &Path,
+        offset: u32,
+    ) -> crate::highlight::ComponentPositions {
+        crate::highlight::component_positions(&self.inner, path, offset)
     }
 
-    /// Request information on clicked object
+    /// Find the position of the `element`.
     ///
     /// WARNING: this is not part of the public API
     #[cfg(feature = "highlight")]
-    pub fn set_design_mode(&self, active: bool) {
-        crate::highlight::set_design_mode(&self.inner, active);
+    pub fn element_position(
+        &self,
+        element: &i_slint_compiler::object_tree::ElementRc,
+    ) -> Vec<i_slint_core::lengths::LogicalRect> {
+        crate::highlight::element_position(&self.inner, element)
     }
 
-    /// Register callback to handle current item information
-    ///
-    /// The callback will be called with the file name, the start line and column
-    /// followed by the end line and column.
+    /// Find the the `element` that was defined at the text position.
     ///
     /// WARNING: this is not part of the public API
     #[cfg(feature = "highlight")]
-    pub fn on_element_selected(&self, callback: Box<dyn Fn(&str, u32, u32, u32, u32)>) {
-        crate::highlight::on_element_selected(&self.inner, callback);
+    pub fn element_at_source_code_position(
+        &self,
+        path: &Path,
+        offset: u32,
+    ) -> Vec<i_slint_compiler::object_tree::ElementRc> {
+        crate::highlight::element_at_source_code_position(&self.inner, path, offset)
     }
 }
 
 impl ComponentHandle for ComponentInstance {
-    type Inner = crate::dynamic_component::ErasedComponentBox;
+    type Inner = crate::dynamic_item_tree::ErasedItemTreeBox;
 
     fn as_weak(&self) -> Weak<Self>
     where
@@ -1136,7 +1245,7 @@ impl ComponentHandle for ComponentInstance {
     }
 
     fn from_inner(
-        inner: vtable::VRc<i_slint_core::component::ComponentVTable, Self::Inner>,
+        inner: vtable::VRc<i_slint_core::item_tree::ItemTreeVTable, Self::Inner>,
     ) -> Self {
         Self { inner }
     }
@@ -1168,7 +1277,7 @@ impl ComponentHandle for ComponentInstance {
 }
 
 impl From<ComponentInstance>
-    for vtable::VRc<i_slint_core::component::ComponentVTable, ErasedComponentBox>
+    for vtable::VRc<i_slint_core::item_tree::ItemTreeVTable, ErasedItemTreeBox>
 {
     fn from(value: ComponentInstance) -> Self {
         value.inner
@@ -1188,13 +1297,17 @@ pub enum GetPropertyError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SetPropertyError {
-    /// There is no property with the given name
+    /// There is no property with the given name.
     #[error("no such property")]
     NoSuchProperty,
-    /// The property exist but does not have a type matching the dynamic value
+    /// The property exists but does not have a type matching the dynamic value.
+    ///
+    /// This happens for example when assigning a source struct value to a target
+    /// struct property, where the source doesn't have all the fields the target struct
+    /// requires.
     #[error("wrong type")]
     WrongType,
-    /// Attempt to set an output property
+    /// Attempt to set an output property.
     #[error("access denied")]
     AccessDenied,
 }
@@ -1224,6 +1337,15 @@ pub fn run_event_loop() -> Result<(), PlatformError> {
     i_slint_backend_selector::with_platform(|b| b.run_event_loop())
 }
 
+#[cfg(all(feature = "internal", target_arch = "wasm32"))]
+/// Spawn the event loop.
+///
+/// Like [`run_event_loop()`], but returns immediately as the loop is running within
+/// the browser's runtime
+pub fn spawn_event_loop() -> Result<(), PlatformError> {
+    i_slint_backend_selector::with_platform(|_| i_slint_backend_winit::spawn_event_loop())
+}
+
 /// This module contains a few functions used by the tests
 #[doc(hidden)]
 pub mod testing {
@@ -1233,12 +1355,12 @@ pub mod testing {
     /// Wrapper around [`i_slint_core::tests::slint_send_mouse_click`]
     pub fn send_mouse_click(comp: &super::ComponentInstance, x: f32, y: f32) {
         i_slint_core::tests::slint_send_mouse_click(
-            &vtable::VRc::into_dyn(comp.inner.clone()),
             x,
             y,
             &WindowInner::from_pub(comp.window()).window_adapter(),
         );
     }
+
     /// Wrapper around [`i_slint_core::tests::slint_send_keyboard_char`]
     pub fn send_keyboard_char(
         comp: &super::ComponentInstance,

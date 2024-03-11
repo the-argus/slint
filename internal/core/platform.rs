@@ -13,16 +13,20 @@ pub use crate::renderer::Renderer;
 #[cfg(feature = "software-renderer")]
 pub use crate::software_renderer;
 #[cfg(all(not(feature = "std"), feature = "unsafe-single-threaded"))]
-use crate::unsafe_single_threaded::{thread_local, OnceCell};
-pub use crate::window::WindowAdapter;
+use crate::unsafe_single_threaded::OnceCell;
+pub use crate::window::{LayoutConstraints, WindowAdapter, WindowProperties};
 use crate::SharedString;
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use alloc::rc::Rc;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(feature = "std")]
-use core::num::NonZeroU32;
-#[cfg(feature = "std")]
 use once_cell::sync::OnceCell;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+use std::time;
+#[cfg(target_arch = "wasm32")]
+use web_time as time;
 
 /// This trait defines the interface between Slint and platform APIs typically provided by operating and windowing systems.
 pub trait Platform {
@@ -34,13 +38,41 @@ pub trait Platform {
         Err(PlatformError::NoEventLoopProvider)
     }
 
-    /// Specify if the event loop should quit quen the last window is closed.
-    /// The default behavior is `true`.
-    /// When this is set to `false`, the event loop must keep running until
-    /// [`slint::quit_event_loop()`](crate::api::quit_event_loop()) is called
+    /// Spins an event loop for a specified period of time.
+    ///
+    /// This function is similar to `run_event_loop()` with two differences:
+    /// * The function is expected to return after the provided timeout, but
+    ///   allow for subsequent invocations to resume the previous loop. The
+    ///   function can return earlier if the loop was terminated otherwise,
+    ///   for example by `quit_event_loop()` or a last-window-closed mechanism.
+    /// * If the timeout is zero, the implementation should merely peek and
+    ///   process any pending events, but then return immediately.
+    ///
+    /// When the function returns `ControlFlow::Continue`, it is assumed that
+    /// the loop remains intact and that in the future the caller should call
+    /// `process_events()` again, to permit the user to continue to interact with
+    /// windows.
+    /// When the function returns `ControlFlow::Break`, it is assumed that the
+    /// event loop was terminated. Any subsequent calls to `process_events()`
+    /// will start the event loop afresh.
     #[doc(hidden)]
-    fn set_event_loop_quit_on_last_window_closed(&self, _quit_on_last_window_closed: bool) {
-        unimplemented!("The backend does not implement event loop quit behaviors")
+    fn process_events(
+        &self,
+        _timeout: core::time::Duration,
+        _: crate::InternalToken,
+    ) -> Result<core::ops::ControlFlow<()>, PlatformError> {
+        Err(PlatformError::NoEventLoopProvider)
+    }
+
+    #[doc(hidden)]
+    #[deprecated(
+        note = "i-slint-core takes care of closing behavior. Application should call run_event_loop_until_quit"
+    )]
+    /// This is being phased out, see #1499.
+    fn set_event_loop_quit_on_last_window_closed(&self, quit_on_last_window_closed: bool) {
+        assert!(!quit_on_last_window_closed);
+        crate::context::GLOBAL_CONTEXT
+            .with(|ctx| (*ctx.get().unwrap().0.window_count.borrow_mut()) += 1);
     }
 
     /// Return an [`EventLoopProxy`] that can be used to send event to the event loop
@@ -63,8 +95,8 @@ pub trait Platform {
     fn duration_since_start(&self) -> core::time::Duration {
         #[cfg(feature = "std")]
         {
-            let the_beginning = *INITIAL_INSTANT.get_or_init(instant::Instant::now);
-            instant::Instant::now() - the_beginning
+            let the_beginning = *INITIAL_INSTANT.get_or_init(time::Instant::now);
+            time::Instant::now() - the_beginning
         }
         #[cfg(not(feature = "std"))]
         unimplemented!("The platform abstraction must implement `duration_since_start`")
@@ -74,6 +106,7 @@ pub trait Platform {
     ///
     /// A double click event is a series of two pointer clicks.
     fn click_interval(&self) -> core::time::Duration {
+        // 500ms is the default delay according to https://en.wikipedia.org/wiki/Double-click#Speed_and_timing
         core::time::Duration::from_millis(500)
     }
 
@@ -98,18 +131,19 @@ pub trait Platform {
 }
 
 /// The clip board, used in [`Platform::clipboard_text`] and [Platform::set_clipboard_text`]
+#[repr(u8)]
 #[non_exhaustive]
 #[derive(PartialEq, Clone, Default)]
 pub enum Clipboard {
     /// This is the default clipboard used for text action for Ctrl+V,  Ctrl+C.
     /// Corresponds to the secondary clipboard on X11.
     #[default]
-    DefaultClipboard,
+    DefaultClipboard = 0,
 
     /// This is the clipboard that is used when text is selected
     /// Corresponds to the primary clipboard on X11.
     /// The Platform implementation should do nothing if copy on select is not supported on that platform.
-    SelectionClipboard,
+    SelectionClipboard = 1,
 }
 
 /// Trait that is returned by the [`Platform::new_event_loop_proxy`]
@@ -132,22 +166,16 @@ pub trait EventLoopProxy: Send + Sync {
 }
 
 #[cfg(feature = "std")]
-static INITIAL_INSTANT: once_cell::sync::OnceCell<instant::Instant> =
-    once_cell::sync::OnceCell::new();
+static INITIAL_INSTANT: once_cell::sync::OnceCell<time::Instant> = once_cell::sync::OnceCell::new();
 
 #[cfg(feature = "std")]
-impl std::convert::From<crate::animations::Instant> for instant::Instant {
+impl std::convert::From<crate::animations::Instant> for time::Instant {
     fn from(our_instant: crate::animations::Instant) -> Self {
-        let the_beginning = *INITIAL_INSTANT.get_or_init(instant::Instant::now);
+        let the_beginning = *INITIAL_INSTANT.get_or_init(time::Instant::now);
         the_beginning + core::time::Duration::from_millis(our_instant.0)
     }
 }
 
-thread_local! {
-    /// Internal: Singleton of the platform abstraction.
-    pub(crate) static PLATFORM_INSTANCE : once_cell::unsync::OnceCell<Box<dyn Platform>>
-        = once_cell::unsync::OnceCell::new()
-}
 static EVENTLOOP_PROXY: OnceCell<Box<dyn EventLoopProxy + 'static>> = OnceCell::new();
 
 pub(crate) fn event_loop_proxy() -> Option<&'static dyn EventLoopProxy> {
@@ -168,20 +196,25 @@ pub enum SetPlatformError {
 ///
 /// If the platform abstraction was already set this will return `Err`.
 pub fn set_platform(platform: Box<dyn Platform + 'static>) -> Result<(), SetPlatformError> {
-    PLATFORM_INSTANCE.with(|instance| {
+    crate::context::GLOBAL_CONTEXT.with(|instance| {
         if instance.get().is_some() {
             return Err(SetPlatformError::AlreadySet);
         }
         if let Some(proxy) = platform.new_event_loop_proxy() {
             EVENTLOOP_PROXY.set(proxy).map_err(|_| SetPlatformError::AlreadySet)?
         }
-        instance.set(platform).map_err(|_| SetPlatformError::AlreadySet).unwrap();
+        instance
+            .set(crate::SlintContext::new(platform))
+            .map_err(|_| SetPlatformError::AlreadySet)
+            .unwrap();
+        // Ensure a sane starting point for the animation tick.
+        update_timers_and_animations();
         Ok(())
     })
 }
 
 /// Call this function to update and potentially activate any pending timers, as well
-/// as advance the state of any active animtaions.
+/// as advance the state of any active animations.
 ///
 /// This function should be called before rendering or processing input event, at the
 /// beginning of each event loop iteration.
@@ -201,8 +234,8 @@ pub fn update_timers_and_animations() {
 /// returns false.
 pub fn duration_until_next_timer_update() -> Option<core::time::Duration> {
     crate::timers::TimerList::next_timeout().map(|timeout| {
-        let duration_since_start = crate::platform::PLATFORM_INSTANCE
-            .with(|p| p.get().map(|p| p.duration_since_start()))
+        let duration_since_start = crate::context::GLOBAL_CONTEXT
+            .with(|p| p.get().map(|p| p.0.platform.duration_since_start()))
             .unwrap_or_default();
         core::time::Duration::from_millis(
             timeout.0.saturating_sub(duration_since_start.as_millis() as u64),
@@ -217,7 +250,7 @@ pub use crate::input::PointerEventButton;
 /// A event that describes user input or windowing system events.
 ///
 /// Slint backends typically receive events from the windowing system, translate them to this
-/// enum and deliver to the scene of items via [`slint::Window::dispatch_event()`](`crate::api::Window::dispatch_event()`).
+/// enum and deliver them to the scene of items via [`slint::Window::dispatch_event()`](`crate::api::Window::dispatch_event()`).
 ///
 /// The pointer variants describe events originating from an input device such as a mouse
 /// or a contact point on a touch-enabled surface.
@@ -226,6 +259,7 @@ pub use crate::input::PointerEventButton;
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[repr(u32)]
 pub enum WindowEvent {
     /// A pointer was pressed.
     PointerPressed {
@@ -262,7 +296,18 @@ pub enum WindowEvent {
         /// ```
         text: SharedString,
     },
-    /// A key was pressed.
+    /// A key press was auto-repeated.
+    KeyPressRepeated {
+        /// The unicode representation of the key pressed.
+        ///
+        /// # Example
+        /// A specific key can be mapped to a unicode by using the [`Key`] enum
+        /// ```rust
+        /// let _ = slint::platform::WindowEvent::KeyPressRepeated { text: slint::platform::Key::Shift.into() };
+        /// ```
+        text: SharedString,
+    },
+    /// A key was released.
     KeyReleased {
         /// The unicode representation of the key released.
         ///
@@ -290,6 +335,19 @@ pub enum WindowEvent {
         /// The new logical size of the window
         size: LogicalSize,
     },
+    /// The user requested to close the window.
+    ///
+    /// The backend should send this event when the user tries to close the window,for example by pressing the close button.
+    ///
+    /// This will have the effect of invoking the callback set in [`Window::on_close_requested()`](`crate::api::Window::on_close_requested()`)
+    /// and then hiding the window depending on the return value of the callback.
+    CloseRequested,
+
+    /// The Window was activated or de-activated.
+    ///
+    /// The backend should dispatch this event with true when the window gains focus
+    /// and false when the window loses focus.
+    WindowActiveChanged(bool),
 }
 
 impl WindowEvent {
@@ -305,34 +363,28 @@ impl WindowEvent {
     }
 }
 
-/// This trait describes the interface GPU accelerated renderers in Slint require to render with OpenGL.
-///
-/// It serves the purpose to ensure that the OpenGL context is current before running any OpenGL
-/// commands, as well as providing access to the OpenGL implementation by function pointers.
-///
-/// # Safety
-///
-/// This trait is unsafe because an implementation of get_proc_address could return dangling
-/// pointers. In practice an implementation of this trait should just forward to the EGL/WGL/CGL
-/// C library that implements EGL/CGL/WGL.
-#[cfg(feature = "std")]
-#[allow(unsafe_code)]
-pub unsafe trait OpenGLInterface {
-    /// Ensures that the OpenGL context is current when returning from this function.
-    fn ensure_current(&self) -> Result<(), Box<dyn std::error::Error>>;
-    /// This function is called by the renderers when all OpenGL commands have been issued and
-    /// the back buffer is reading for on-screen presentation. Typically implementations forward
-    /// this to platform specific APIs such as eglSwapBuffers.
-    fn swap_buffers(&self) -> Result<(), Box<dyn std::error::Error>>;
-    /// This function is called by the renderers when the surface needs to be resized, typically
-    /// in response to the windowing system notifying of a change in the window system.
-    /// For most implementations this is a no-op, with the exception for wayland for example.
-    fn resize(
+/**
+ * Test the animation tick is updated when a platform is set
+```rust
+use i_slint_core::platform::*;
+struct DummyBackend;
+impl Platform for DummyBackend {
+     fn create_window_adapter(
         &self,
-        width: NonZeroU32,
-        height: NonZeroU32,
-    ) -> Result<(), Box<dyn std::error::Error>>;
-    /// Returns the address of the OpenGL function specified by name, or a null pointer if the
-    /// function does not exist.
-    fn get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void;
+    ) -> Result<std::rc::Rc<dyn WindowAdapter>, PlatformError> {
+        Err(PlatformError::Other("not implemented".into()))
+    }
+    fn duration_since_start(&self) -> core::time::Duration {
+        core::time::Duration::from_millis(100)
+    }
 }
+
+let start_time = i_slint_core::tests::slint_get_mocked_time();
+i_slint_core::platform::set_platform(Box::new(DummyBackend{}));
+let time_after_platform_init = i_slint_core::tests::slint_get_mocked_time();
+assert_ne!(time_after_platform_init, start_time);
+assert_eq!(time_after_platform_init, 100);
+```
+ */
+#[cfg(doctest)]
+const _ANIM_TICK_UPDATED_ON_PLATFORM_SET: () = ();

@@ -192,12 +192,13 @@ static slint::SharedString key_event_text(QKeyEvent *e)
 class MyWindow : public QWindow, public slint::platform::WindowAdapter
 {
     std::optional<slint::platform::SkiaRenderer> m_renderer;
+    bool m_visible = false;
 
 public:
     MyWindow(QWindow *parentWindow = nullptr) : QWindow(parentWindow)
     {
         resize(640, 480);
-        m_renderer.emplace(window_handle_for_qt_window(this), physical_size());
+        m_renderer.emplace(window_handle_for_qt_window(this), size());
     }
 
     slint::platform::AbstractRenderer &renderer() override { return m_renderer.value(); }
@@ -214,16 +215,34 @@ public:
         update_timer();
     }
 
+    void closeEvent(QCloseEvent *event) override
+    {
+        if (m_visible) {
+            event->ignore();
+            window().dispatch_close_requested_event();
+        }
+    }
+
     bool event(QEvent *e) override
     {
         if (e->type() == QEvent::UpdateRequest) {
             paintEvent(static_cast<QPaintEvent *>(e));
             return true;
         } else if (e->type() == QEvent::KeyPress) {
-            window().dispatch_key_press_event(key_event_text(static_cast<QKeyEvent *>(e)));
+            auto ke = static_cast<QKeyEvent *>(e);
+            if (ke->isAutoRepeat())
+                window().dispatch_key_press_repeat_event(key_event_text(ke));
+            else
+                window().dispatch_key_press_event(key_event_text(ke));
             return true;
         } else if (e->type() == QEvent::KeyRelease) {
             window().dispatch_key_release_event(key_event_text(static_cast<QKeyEvent *>(e)));
+            return true;
+        } else if (e->type() == QEvent::WindowActivate) {
+            window().dispatch_window_active_changed_event(true);
+            return true;
+        } else if (e->type() == QEvent::WindowDeactivate) {
+            window().dispatch_window_active_changed_event(false);
             return true;
         } else {
             return QWindow::event(e);
@@ -232,13 +251,22 @@ public:
 
     void set_visible(bool visible) override
     {
+        m_visible = visible;
         if (visible) {
             window().dispatch_scale_factor_change_event(devicePixelRatio());
+            QWindow::show();
+        } else {
+            QWindow::close();
         }
-        this->QWindow::setVisible(visible);
     }
 
-    slint::PhysicalSize physical_size() const override
+    void set_size(slint::PhysicalSize size) override
+    {
+        float scale_factor = devicePixelRatio();
+        resize(size.width / scale_factor, size.height / scale_factor);
+    }
+
+    slint::PhysicalSize size() override
     {
         auto windowSize = slint::LogicalSize({ float(width()), float(height()) });
         float scale_factor = devicePixelRatio();
@@ -246,7 +274,39 @@ public:
                                      uint32_t(windowSize.height * scale_factor) });
     }
 
+    void set_position(slint::PhysicalPosition position) override
+    {
+        float scale_factor = devicePixelRatio();
+        setFramePosition(QPointF(position.x / scale_factor, position.y / scale_factor).toPoint());
+    }
+
+    std::optional<slint::PhysicalPosition> position() override
+    {
+        auto pos = framePosition();
+        float scale_factor = devicePixelRatio();
+        return { slint::PhysicalPosition(
+                { int32_t(pos.x() * scale_factor), int32_t(pos.y() * scale_factor) }) };
+    }
+
     void request_redraw() override { requestUpdate(); }
+
+    void update_window_properties(const WindowProperties &props) override
+    {
+        QWindow::setTitle(QString::fromUtf8(props.title().data()));
+        auto c = props.layout_constraints();
+        QWindow::setMaximumSize(c.max ? QSize(c.max->width, c.max->height)
+                                      : QSize(1 << 15, 1 << 15));
+        QWindow::setMinimumSize(c.min ? QSize(c.min->width, c.min->height) : QSize());
+
+        Qt::WindowStates states = windowState() & Qt::WindowActive;
+        if (props.is_fullscreen())
+            states |= Qt::WindowFullScreen;
+        if (props.is_minimized())
+            states |= Qt::WindowMinimized;
+        if (props.is_maximized())
+            states |= Qt::WindowMaximized;
+        setWindowStates(states);
+    }
 
     void resizeEvent(QResizeEvent *ev) override
     {
@@ -287,6 +347,39 @@ struct MyPlatform : public slint::platform::Platform
     std::unique_ptr<slint::platform::WindowAdapter> create_window_adapter() override
     {
         return std::make_unique<MyWindow>(parentWindow.get());
+    }
+
+    void set_clipboard_text(const slint::SharedString &str,
+                            slint::platform::Platform::Clipboard clipboard) override
+    {
+        switch (clipboard) {
+        case slint::platform::Platform::Clipboard::DefaultClipboard:
+            qApp->clipboard()->setText(QString::fromUtf8(str.data()), QClipboard::Clipboard);
+            break;
+        case slint::platform::Platform::Clipboard::SelectionClipboard:
+            qApp->clipboard()->setText(QString::fromUtf8(str.data()), QClipboard::Selection);
+            break;
+        }
+    }
+
+    std::optional<slint::SharedString> clipboard_text(Clipboard clipboard) override
+    {
+        QString text;
+        switch (clipboard) {
+        case slint::platform::Platform::Clipboard::DefaultClipboard:
+            text = qApp->clipboard()->text(QClipboard::Clipboard);
+            break;
+        case slint::platform::Platform::Clipboard::SelectionClipboard:
+            text = qApp->clipboard()->text(QClipboard::Selection);
+            break;
+        default:
+            return {};
+        }
+        if (text.isNull()) {
+            return {};
+        } else {
+            return slint::SharedString(text.toUtf8().data());
+        }
     }
 };
 

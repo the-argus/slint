@@ -39,6 +39,8 @@ impl super::Surface for OpenGLSurface {
         let (current_glutin_context, glutin_surface) =
             Self::init_glutin(window_handle, display_handle, width, height)?;
 
+        glutin_surface.resize(&current_glutin_context, width, height);
+
         let fb_info = {
             use glow::HasContext;
 
@@ -60,11 +62,14 @@ impl super::Surface for OpenGLSurface {
 
         let gl_interface = skia_safe::gpu::gl::Interface::new_load_with_cstr(|name| {
             current_glutin_context.display().get_proc_address(name) as *const _
-        });
+        })
+        .ok_or_else(|| {
+            format!("Skia Renderer: Internal Error: Could not create OpenGL Interface")
+        })?;
 
         let mut gr_context =
             skia_safe::gpu::DirectContext::new_gl(gl_interface, None).ok_or_else(|| {
-                format!("Skia Renderer: Internal Error: Could not create Skia OpenGL interface")
+                format!("Skia Renderer: Internal Error: Could not create Skia Direct Context from GL interface")
             })?;
 
         let width: i32 = size.width.try_into().map_err(|e| {
@@ -98,7 +103,11 @@ impl super::Surface for OpenGLSurface {
         "opengl"
     }
 
-    fn supports_graphics_api(&self) -> bool {
+    fn supports_graphics_api() -> bool {
+        true
+    }
+
+    fn supports_graphics_api_with_self(&self) -> bool {
         true
     }
 
@@ -120,7 +129,8 @@ impl super::Surface for OpenGLSurface {
     fn render(
         &self,
         size: PhysicalWindowSize,
-        callback: &dyn Fn(&mut skia_safe::Canvas, &mut skia_safe::gpu::DirectContext),
+        callback: &dyn Fn(&skia_safe::Canvas, Option<&mut skia_safe::gpu::DirectContext>),
+        pre_present_callback: &RefCell<Option<Box<dyn FnMut()>>>,
     ) -> Result<(), PlatformError> {
         self.ensure_context_current()?;
 
@@ -147,7 +157,13 @@ impl super::Surface for OpenGLSurface {
 
         let skia_canvas = surface.canvas();
 
-        callback(skia_canvas, gr_context);
+        skia_canvas.save();
+        callback(skia_canvas, Some(gr_context));
+        skia_canvas.restore();
+
+        if let Some(pre_present_callback) = pre_present_callback.borrow_mut().as_mut() {
+            pre_present_callback();
+        }
 
         self.glutin_surface.swap_buffers(&current_context).map_err(|glutin_error| {
             format!("Skia OpenGL Renderer: Error swapping buffers: {glutin_error}").into()
@@ -157,20 +173,10 @@ impl super::Surface for OpenGLSurface {
     fn resize_event(&self, size: PhysicalWindowSize) -> Result<(), PlatformError> {
         self.ensure_context_current()?;
 
-        let width = size.width.try_into().map_err(|_| {
-            format!(
-                "Attempting to resize OpenGL window surface with an invalid width: {}",
-                size.width
-            )
-        })?;
-        let height = size.height.try_into().map_err(|_| {
-            format!(
-                "Attempting to resize OpenGL window surface with an invalid height: {}",
-                size.height
-            )
-        })?;
+        if let Some((width, height)) = size.width.try_into().ok().zip(size.height.try_into().ok()) {
+            self.glutin_surface.resize(&self.glutin_context, width, height);
+        }
 
-        self.glutin_surface.resize(&self.glutin_context, width, height);
         Ok(())
     }
 
@@ -206,109 +212,97 @@ impl OpenGLSurface {
     > {
         cfg_if::cfg_if! {
             if #[cfg(target_os = "macos")] {
-                let prefs = [glutin::display::DisplayApiPreference::Cgl];
-            } else if #[cfg(all(feature = "x11", not(target_family = "windows")))] {
-                let mut prefs = vec![glutin::display::DisplayApiPreference::Egl];
-                // GLX can only be supported with xlib, not xcb.
-                if matches!(_window_handle.raw_window_handle(), raw_window_handle::RawWindowHandle::Xlib(..)) {
-                    prefs.push(glutin::display::DisplayApiPreference::Glx(Box::new(winit::platform::x11::register_xlib_error_hook)));
-                }
+                let display_api_preference = glutin::display::DisplayApiPreference::Cgl;
             } else if #[cfg(not(target_family = "windows"))] {
-                let prefs = [glutin::display::DisplayApiPreference::Egl];
+                let display_api_preference = glutin::display::DisplayApiPreference::Egl;
             } else {
-                let prefs = [glutin::display::DisplayApiPreference::EglThenWgl(Some(_window_handle.raw_window_handle()))];
+                let display_api_preference = glutin::display::DisplayApiPreference::EglThenWgl(Some(_window_handle.raw_window_handle()));
             }
         }
 
-        let try_create_surface =
-            |display_api_preference| -> Result<(_, _), Box<dyn std::error::Error>> {
-                let gl_display = unsafe {
-                    glutin::display::Display::new(
-                        _display_handle.raw_display_handle(),
-                        display_api_preference,
-                    )?
-                };
+        let gl_display = unsafe {
+            glutin::display::Display::new(
+                _display_handle.raw_display_handle(),
+                display_api_preference,
+            )
+            .map_err(|glutin_error| {
+                format!(
+                    "Error creating glutin display for native display {:#?}: {}",
+                    _display_handle.raw_display_handle(),
+                    glutin_error
+                )
+            })?
+        };
 
-                let config_template_builder = glutin::config::ConfigTemplateBuilder::new();
+        let config_template_builder = glutin::config::ConfigTemplateBuilder::new();
 
-                // On macOS, there's only one GL config and that's initialized based on the values in the config template
-                // builder. So if that one has transparency enabled, it'll show up in the config, and will be set on the
-                // context later. So we must enable it here, there's no way of enabling it later.
-                // On EGL/GLX/WGL there are system provided configs that may or may not support transparency. Here in case
-                // the system doesn't support transparency, we want to fall back to a config that doesn't - better than not
-                // rendering anything at all. So we don't want to limit the configurations we get to see early on.
-                #[cfg(target_os = "macos")]
-                let config_template_builder = config_template_builder.with_transparency(true);
+        // On macOS, there's only one GL config and that's initialized based on the values in the config template
+        // builder. So if that one has transparency enabled, it'll show up in the config, and will be set on the
+        // context later. So we must enable it here, there's no way of enabling it later.
+        // On EGL/GLX/WGL there are system provided configs that may or may not support transparency. Here in case
+        // the system doesn't support transparency, we want to fall back to a config that doesn't - better than not
+        // rendering anything at all. So we don't want to limit the configurations we get to see early on.
+        // Commented out due to https://github.com/rust-windowing/glutin/issues/1640
+        #[cfg(target_os = "macos")]
+        let config_template_builder = config_template_builder.with_transparency(true);
 
-                // Upstream advises to use this only on Windows.
-                #[cfg(target_family = "windows")]
-                let config_template_builder = config_template_builder
-                    .compatible_with_native_window(_window_handle.raw_window_handle());
+        // Upstream advises to use this only on Windows.
+        #[cfg(target_family = "windows")]
+        let config_template_builder = config_template_builder
+            .compatible_with_native_window(_window_handle.raw_window_handle());
 
-                let config_template = config_template_builder.build();
+        let config_template = config_template_builder.build();
 
-                let config = unsafe {
-                    gl_display
-                        .find_configs(config_template)?
-                        .reduce(|accum, config| {
-                            let transparency_check =
-                                config.supports_transparency().unwrap_or(false)
-                                    & !accum.supports_transparency().unwrap_or(false);
+        let config = unsafe {
+            gl_display
+                .find_configs(config_template)
+                .map_err(|e| format!("Could not find valid OpenGL display configurations: {e}"))?
+                .reduce(|accum, config| {
+                    let transparency_check = config.supports_transparency().unwrap_or(false)
+                        & !accum.supports_transparency().unwrap_or(false);
 
-                            if transparency_check || config.num_samples() < accum.num_samples() {
-                                config
-                            } else {
-                                accum
-                            }
-                        })
-                        .ok_or("Unable to find suitable GL config")?
-                };
-
-                let gles_context_attributes = ContextAttributesBuilder::new()
-                    .with_context_api(ContextApi::Gles(Some(glutin::context::Version {
-                        major: 2,
-                        minor: 0,
-                    })))
-                    .build(Some(_window_handle.raw_window_handle()));
-
-                let fallback_context_attributes =
-                    ContextAttributesBuilder::new().build(Some(_window_handle.raw_window_handle()));
-
-                let not_current_gl_context = unsafe {
-                    gl_display.create_context(&config, &gles_context_attributes).or_else(|_| {
-                        gl_display.create_context(&config, &fallback_context_attributes)
-                    })?
-                };
-
-                let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-                    _window_handle.raw_window_handle(),
-                    width,
-                    height,
-                );
-
-                let surface = unsafe { config.display().create_window_surface(&config, &attrs)? };
-
-                Ok((surface, not_current_gl_context))
-            };
-
-        let num_prefs = prefs.len();
-        let (surface, not_current_gl_context) = prefs
-            .into_iter()
-            .enumerate()
-            .find_map(|(i, pref)| {
-                let is_last = i == num_prefs - 1;
-
-                match try_create_surface(pref) {
-                    Ok(result) => Some(Ok(result)),
-                    Err(glutin_error) => {
-                        if is_last {
-                            return Some(Err(format!("Skia OpenGL Renderer: Failed to create OpenGL Window Surface: {glutin_error}")));
-                        }
-                        None
+                    if transparency_check || config.num_samples() < accum.num_samples() {
+                        config
+                    } else {
+                        accum
                     }
-                }
-            })
-            .unwrap()?;
+                })
+                .ok_or("Unable to find suitable GL config")?
+        };
+
+        let create_gl_context = |gles_major| {
+            let gles_context_attributes = ContextAttributesBuilder::new()
+                .with_context_api(ContextApi::Gles(Some(glutin::context::Version {
+                    major: gles_major,
+                    minor: 0,
+                })))
+                .build(Some(_window_handle.raw_window_handle()));
+
+            let fallback_context_attributes =
+                ContextAttributesBuilder::new().build(Some(_window_handle.raw_window_handle()));
+
+            unsafe {
+                gl_display
+                    .create_context(&config, &gles_context_attributes)
+                    .or_else(|_| gl_display.create_context(&config, &fallback_context_attributes))
+                    .map_err(|e| format!("Error creating OpenGL context: {e}"))
+            }
+        };
+
+        let not_current_gl_context = create_gl_context(3).or_else(|_| create_gl_context(2))?;
+
+        let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+            _window_handle.raw_window_handle(),
+            width,
+            height,
+        );
+
+        let surface = unsafe {
+            config
+                .display()
+                .create_window_surface(&config, &attrs)
+                .map_err(|e| format!("Error creating OpenGL window surface: {e}"))?
+        };
 
         // Align the GL layer to the top-left, so that resizing only invalidates the bottom/right
         // part of the window.
@@ -343,6 +337,14 @@ impl OpenGLSurface {
             .into());
         }
 
+        // Try to default to vsync and ignore if the driver doesn't support it.
+        surface
+            .set_swap_interval(
+                &context,
+                glutin::surface::SwapInterval::Wait(NonZeroU32::new(1).unwrap()),
+            )
+            .ok();
+
         Ok((context, surface))
     }
 
@@ -355,7 +357,7 @@ impl OpenGLSurface {
     ) -> Result<skia_safe::Surface, PlatformError> {
         let config = gl_context.config();
 
-        let backend_render_target = skia_safe::gpu::BackendRenderTarget::new_gl(
+        let backend_render_target = skia_safe::gpu::backend_render_targets::make_gl(
             (width, height),
             Some(config.num_samples() as _),
             config.stencil_size() as _,

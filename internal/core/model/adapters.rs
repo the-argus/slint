@@ -28,19 +28,73 @@ impl TestView {
 
 #[cfg(test)]
 impl ModelChangeListener for TestView {
-    fn row_changed(&self, row: usize) {
+    fn row_changed(self: Pin<&Self>, row: usize) {
         self.changed_rows.borrow_mut().push(row);
     }
 
-    fn row_added(&self, index: usize, count: usize) {
+    fn row_added(self: Pin<&Self>, index: usize, count: usize) {
         self.added_rows.borrow_mut().push((index, count));
     }
 
-    fn row_removed(&self, index: usize, count: usize) {
+    fn row_removed(self: Pin<&Self>, index: usize, count: usize) {
         self.removed_rows.borrow_mut().push((index, count));
     }
-    fn reset(&self) {
+    fn reset(self: Pin<&Self>) {
         *self.reset.borrow_mut() += 1;
+    }
+}
+
+#[cfg(test)]
+struct ModelChecker<Data: PartialEq + core::fmt::Debug + 'static> {
+    model: Rc<dyn Model<Data = Data>>,
+    rows_copy: RefCell<Vec<Data>>,
+}
+
+#[cfg(test)]
+impl<Data: PartialEq + core::fmt::Debug + 'static> ModelChangeListener for ModelChecker<Data> {
+    fn row_changed(self: Pin<&Self>, row: usize) {
+        self.rows_copy.borrow_mut()[row] = self.model.row_data(row).unwrap();
+    }
+
+    fn row_added(self: Pin<&Self>, index: usize, count: usize) {
+        let mut copy = self.rows_copy.borrow_mut();
+        for row in index..index + count {
+            copy.insert(row, self.model.row_data(row).unwrap());
+        }
+    }
+
+    fn row_removed(self: Pin<&Self>, index: usize, count: usize) {
+        self.rows_copy.borrow_mut().drain(index..index + count);
+    }
+    fn reset(self: Pin<&Self>) {
+        *self.rows_copy.borrow_mut() = ModelRc::from(self.model.clone()).iter().collect()
+    }
+}
+
+#[cfg(test)]
+impl<Data: PartialEq + core::fmt::Debug + 'static> ModelChecker<Data> {
+    pub fn new(
+        model: Rc<impl Model<Data = Data> + 'static>,
+    ) -> Pin<Box<ModelChangeListenerContainer<Self>>> {
+        let s = Self { rows_copy: RefCell::new(model.iter().collect()), model: model.clone() };
+        let s = Box::pin(ModelChangeListenerContainer::new(s));
+        model.model_tracker().attach_peer(s.as_ref().model_peer());
+        s
+    }
+
+    #[track_caller]
+    pub fn check(&self) {
+        assert_eq!(
+            *self.rows_copy.borrow(),
+            ModelRc::from(self.model.clone()).iter().collect::<Vec<_>>()
+        );
+    }
+}
+
+#[cfg(test)]
+impl<Data: PartialEq + core::fmt::Debug + 'static> Drop for ModelChecker<Data> {
+    fn drop(&mut self) {
+        self.check();
     }
 }
 
@@ -164,8 +218,15 @@ where
     F: Fn(T) -> U,
     M: Model<Data = T>,
 {
-    pub fn new(model: M, map_function: F) -> Self {
-        Self { wrapped_model: model, map_function }
+    /// Creates a new MapModel based on the given `wrapped_model` and `map_function`.
+    /// Alternatively you can use [`ModelExt::map`] on your Model.
+    pub fn new(wrapped_model: M, map_function: F) -> Self {
+        Self { wrapped_model, map_function }
+    }
+
+    /// Returns a reference to the inner model
+    pub fn source_model(&self) -> &M {
+        &self.wrapped_model
     }
 }
 
@@ -215,7 +276,7 @@ where
     M: Model + 'static,
     F: Fn(&M::Data) -> bool + 'static,
 {
-    fn row_changed(&self, row: usize) {
+    fn row_changed(self: Pin<&Self>, row: usize) {
         let mut mapping = self.mapping.borrow_mut();
 
         let (index, is_contained) = match mapping.binary_search(&row) {
@@ -240,7 +301,7 @@ where
         }
     }
 
-    fn row_added(&self, index: usize, count: usize) {
+    fn row_added(self: Pin<&Self>, index: usize, count: usize) {
         if count == 0 {
             return;
         }
@@ -254,24 +315,20 @@ where
             .filter_map(|(i, e)| (self.filter_function)(&e).then_some(i))
             .collect();
 
+        let mut mapping = self.mapping.borrow_mut();
+        let insertion_point = mapping.binary_search(&index).unwrap_or_else(|ip| ip);
+        mapping[insertion_point..].iter_mut().for_each(|i| *i += count);
+
         if !insertion.is_empty() {
-            let mut mapping = self.mapping.borrow_mut();
-            let insertion_point = mapping.binary_search(&index).unwrap_or_else(|ip| ip);
-
-            let old_mapping_len = mapping.len();
-            mapping.resize(old_mapping_len + insertion.len(), 0);
-            mapping
-                .copy_within(insertion_point..old_mapping_len, insertion_point + insertion.len());
-            mapping[insertion_point..insertion_point + insertion.len()].copy_from_slice(&insertion);
-
-            mapping.iter_mut().skip(insertion_point + insertion.len()).for_each(|i| *i += count);
+            let insertion_len = insertion.len();
+            mapping.splice(insertion_point..insertion_point, insertion.into_iter());
 
             drop(mapping);
-            self.notify.row_added(insertion_point, insertion.len());
+            self.notify.row_added(insertion_point, insertion_len);
         }
     }
 
-    fn row_removed(&self, index: usize, count: usize) {
+    fn row_removed(self: Pin<&Self>, index: usize, count: usize) {
         if count == 0 {
             return;
         }
@@ -281,19 +338,16 @@ where
         let end = mapping.binary_search(&(index + count)).unwrap_or_else(|e| e);
         let range = start..end;
 
+        mapping[end..].iter_mut().for_each(|i| *i -= count);
+
         if !range.is_empty() {
-            mapping.copy_within(end.., start);
-            let new_size = mapping.len() - range.len();
-            mapping.truncate(new_size);
-
-            mapping.iter_mut().skip(start).for_each(|i| *i -= count);
-
+            mapping.drain(range.clone());
             drop(mapping);
             self.notify.row_removed(start, range.len());
         }
     }
 
-    fn reset(&self) {
+    fn reset(self: Pin<&Self>) {
         self.build_mapping_vec();
         self.notify.reset();
     }
@@ -370,7 +424,7 @@ where
     F: Fn(&M::Data) -> bool + 'static,
 {
     /// Creates a new FilterModel based on the given `wrapped_model` and filtered by `filter_function`.
-    /// Alternativly you can use [`ModelExt::filter`] on your Model.
+    /// Alternatively you can use [`ModelExt::filter`] on your Model.
     pub fn new(wrapped_model: M, filter_function: F) -> Self {
         let filter_model_inner = FilterModelInner {
             wrapped_model,
@@ -391,12 +445,17 @@ where
     /// Manually reapply the filter. You need to run this e.g. if the filtering function depends on
     /// mutable state and it has changed.
     pub fn reset(&self) {
-        self.0.reset();
+        self.0.as_ref().get().reset();
     }
 
     /// Gets the row index of the underlying unfiltered model for a given filtered row index.
     pub fn unfiltered_row(&self, filtered_row: usize) -> usize {
         self.0.mapping.borrow()[filtered_row]
+    }
+
+    /// Returns a reference to the inner model
+    pub fn source_model(&self) -> &M {
+        &self.0.as_ref().get().get_ref().wrapped_model
     }
 }
 
@@ -427,12 +486,18 @@ where
     fn model_tracker(&self) -> &dyn ModelTracker {
         &self.0.notify
     }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
 }
 
 #[test]
 fn test_filter_model() {
     let wrapped_rc = Rc::new(VecModel::from(vec![1, 2, 3, 4, 5, 6]));
-    let filter = FilterModel::new(wrapped_rc.clone(), |x| x % 2 == 0);
+    let filter = Rc::new(FilterModel::new(wrapped_rc.clone(), |x| x % 2 == 0));
+
+    let _checker = ModelChecker::new(filter.clone());
 
     assert_eq!(filter.row_data(0).unwrap(), 2);
     assert_eq!(filter.row_data(1).unwrap(), 4);
@@ -467,6 +532,26 @@ fn test_filter_model() {
     assert_eq!(filter.row_count(), 5);
 }
 
+#[test]
+fn test_filter_model_source_model() {
+    let wrapped_rc = Rc::new(VecModel::from(vec![1, 2, 3, 4]));
+    let model = Rc::new(FilterModel::new(wrapped_rc.clone(), |x| x % 2 == 0));
+
+    let observer = Box::pin(ModelChangeListenerContainer::<TestView>::default());
+    model.model_tracker().attach_peer(Pin::as_ref(&observer).model_peer());
+
+    let _checker = ModelChecker::new(model.clone());
+
+    model.source_model().push(5);
+    model.source_model().push(6);
+
+    let expected = &[2, 4, 6];
+    assert_eq!(model.row_count(), expected.len());
+    for (i, v) in expected.iter().enumerate() {
+        assert_eq!(model.row_data(i), Some(*v), "Expected {} at index {}", v, i);
+    }
+}
+
 pub trait SortHelper<D> {
     fn cmp(&mut self, lhs: &D, rhs: &D) -> core::cmp::Ordering;
 }
@@ -494,7 +579,7 @@ where
 struct SortModelInner<M, S>
 where
     M: Model + 'static,
-    S: SortHelper<M::Data>,
+    S: SortHelper<M::Data> + 'static,
 {
     wrapped_model: M,
     sort_helper: RefCell<S>,
@@ -532,9 +617,9 @@ where
 impl<M, S> ModelChangeListener for SortModelInner<M, S>
 where
     M: Model + 'static,
-    S: SortHelper<M::Data>,
+    S: SortHelper<M::Data> + 'static,
 {
-    fn row_changed(&self, row: usize) {
+    fn row_changed(self: Pin<&Self>, row: usize) {
         if self.sorted_rows_dirty.get() {
             self.reset();
             return;
@@ -564,7 +649,7 @@ where
         }
     }
 
-    fn row_added(&self, index: usize, count: usize) {
+    fn row_added(self: Pin<&Self>, index: usize, count: usize) {
         if count == 0 {
             return;
         }
@@ -595,7 +680,7 @@ where
         }
     }
 
-    fn row_removed(&self, index: usize, count: usize) {
+    fn row_removed(self: Pin<&Self>, index: usize, count: usize) {
         if count == 0 {
             return;
         }
@@ -634,7 +719,7 @@ where
         }
     }
 
-    fn reset(&self) {
+    fn reset(self: Pin<&Self>) {
         self.sorted_rows_dirty.set(true);
         self.notify.reset();
     }
@@ -736,7 +821,7 @@ where
 pub struct SortModel<M, F>(Pin<Box<ModelChangeListenerContainer<SortModelInner<M, F>>>>)
 where
     M: Model + 'static,
-    F: SortHelper<M::Data>;
+    F: SortHelper<M::Data> + 'static;
 
 impl<M, F> SortModel<M, F>
 where
@@ -744,7 +829,7 @@ where
     F: FnMut(&M::Data, &M::Data) -> core::cmp::Ordering + 'static,
 {
     /// Creates a new SortModel based on the given `wrapped_model` and sorted by `sort_function`.
-    /// Alternativly you can use [`ModelExt::sort_by`] on your Model.
+    /// Alternatively you can use [`ModelExt::sort_by`] on your Model.
     pub fn new(wrapped_model: M, sort_function: F) -> Self
     where
         F: FnMut(&M::Data, &M::Data) -> core::cmp::Ordering + 'static,
@@ -763,6 +848,11 @@ where
 
         Self(container)
     }
+
+    /// Returns a reference to the inner model
+    pub fn source_model(&self) -> &M {
+        &self.0.as_ref().get().get_ref().wrapped_model
+    }
 }
 
 impl<M> SortModel<M, AscendingSortHelper>
@@ -771,7 +861,7 @@ where
     M::Data: core::cmp::Ord,
 {
     /// Creates a new SortModel based on the given `wrapped_model` and sorted in ascending order.
-    /// Alternativly you can use [`ModelExt::sort`] on your Model.
+    /// Alternatively you can use [`ModelExt::sort`] on your Model.
     pub fn new_ascending(wrapped_model: M) -> Self
     where
         M::Data: core::cmp::Ord,
@@ -794,7 +884,7 @@ where
     /// Manually reapply the sorting. You need to run this e.g. if the sort function depends
     /// on mutable state and it has changed.
     pub fn reset(&self) {
-        self.0.reset();
+        self.0.as_ref().get().reset();
     }
 
     /// Gets the row index of the underlying unsorted model for a given sorted row index.
@@ -833,6 +923,10 @@ where
     fn model_tracker(&self) -> &dyn ModelTracker {
         &self.0.notify
     }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
 }
 
 #[cfg(test)]
@@ -842,7 +936,9 @@ mod sort_tests {
     #[test]
     fn test_sorted_model_insert() {
         let wrapped_rc = Rc::new(VecModel::from(vec![3, 4, 1, 2]));
-        let sorted_model = SortModel::new(wrapped_rc.clone(), |lhs, rhs| lhs.cmp(rhs));
+        let sorted_model = Rc::new(SortModel::new(wrapped_rc.clone(), |lhs, rhs| lhs.cmp(rhs)));
+
+        let _checker = ModelChecker::new(sorted_model.clone());
 
         let observer = Box::pin(ModelChangeListenerContainer::<TestView>::default());
         sorted_model.model_tracker().attach_peer(Pin::as_ref(&observer).model_peer());
@@ -873,7 +969,9 @@ mod sort_tests {
     #[test]
     fn test_sorted_model_remove() {
         let wrapped_rc = Rc::new(VecModel::from(vec![3, 4, 1, 2]));
-        let sorted_model = SortModel::new(wrapped_rc.clone(), |lhs, rhs| lhs.cmp(rhs));
+        let sorted_model = Rc::new(SortModel::new(wrapped_rc.clone(), |lhs, rhs| lhs.cmp(rhs)));
+
+        let _checker = ModelChecker::new(sorted_model.clone());
 
         let observer = Box::pin(ModelChangeListenerContainer::<TestView>::default());
         sorted_model.model_tracker().attach_peer(Pin::as_ref(&observer).model_peer());
@@ -903,7 +1001,9 @@ mod sort_tests {
     #[test]
     fn test_sorted_model_changed() {
         let wrapped_rc = Rc::new(VecModel::from(vec![3, 4, 1, 2]));
-        let sorted_model = SortModel::new(wrapped_rc.clone(), |lhs, rhs| lhs.cmp(rhs));
+        let sorted_model = Rc::new(SortModel::new(wrapped_rc.clone(), |lhs, rhs| lhs.cmp(rhs)));
+
+        let _checker = ModelChecker::new(sorted_model.clone());
 
         let observer = Box::pin(ModelChangeListenerContainer::<TestView>::default());
         sorted_model.model_tracker().attach_peer(Pin::as_ref(&observer).model_peer());
@@ -946,6 +1046,25 @@ mod sort_tests {
         assert_eq!(sorted_model.row_data(1).unwrap(), 1);
         assert_eq!(sorted_model.row_data(2).unwrap(), 2);
         assert_eq!(sorted_model.row_data(3).unwrap(), 3);
+    }
+
+    #[test]
+    fn test_sorted_model_source_model() {
+        let wrapped_rc = Rc::new(VecModel::from(vec![3, 4, 1, 2]));
+        let model = Rc::new(SortModel::new(wrapped_rc.clone(), |lhs, rhs| lhs.cmp(rhs)));
+        let _checker = ModelChecker::new(model.clone());
+
+        let observer = Box::pin(ModelChangeListenerContainer::<TestView>::default());
+        model.model_tracker().attach_peer(Pin::as_ref(&observer).model_peer());
+
+        model.source_model().push(6);
+        model.source_model().push(5);
+
+        let expected = &[1, 2, 3, 4, 5, 6];
+        assert_eq!(model.row_count(), expected.len());
+        for (i, v) in expected.iter().enumerate() {
+            assert_eq!(model.row_data(i), Some(*v), "Expected {} at index {}", v, i);
+        }
     }
 }
 
@@ -1028,25 +1147,23 @@ impl<M> ModelChangeListener for ReverseModelInner<M>
 where
     M: Model + 'static,
 {
-    fn row_changed(&self, row: usize) {
+    fn row_changed(self: Pin<&Self>, row: usize) {
         self.notify.row_changed(self.wrapped_model.row_count() - 1 - row);
     }
 
-    fn row_added(&self, index: usize, count: usize) {
+    fn row_added(self: Pin<&Self>, index: usize, count: usize) {
         let row_count = self.wrapped_model.row_count();
         let old_row_count = row_count - count;
         let index = old_row_count - index;
         self.notify.row_added(index, count);
     }
 
-    fn row_removed(&self, index: usize, count: usize) {
+    fn row_removed(self: Pin<&Self>, index: usize, count: usize) {
         let row_count = self.wrapped_model.row_count();
-        let old_row_count = row_count + count;
-        let index = old_row_count - index - 1;
-        self.notify.row_removed(index, count);
+        self.notify.row_removed(row_count - index, count);
     }
 
-    fn reset(&self) {
+    fn reset(self: Pin<&Self>) {
         self.notify.reset()
     }
 }
@@ -1055,6 +1172,8 @@ impl<M> ReverseModel<M>
 where
     M: Model + 'static,
 {
+    /// Creates a new ReverseModel based on the given `wrapped_model`.
+    /// Alternatively you can use [`ModelExt::reverse`] on your Model.
     pub fn new(wrapped_model: M) -> Self {
         let inner = ReverseModelInner { wrapped_model, notify: Default::default() };
         let container = Box::pin(ModelChangeListenerContainer::new(inner));
@@ -1062,8 +1181,9 @@ where
         Self(container)
     }
 
-    pub fn inner_model(&self) -> &M {
-        &self.0.wrapped_model
+    /// Returns a reference to the inner model
+    pub fn source_model(&self) -> &M {
+        &self.0.as_ref().get().get_ref().wrapped_model
     }
 }
 
@@ -1079,7 +1199,7 @@ where
 
     fn row_data(&self, row: usize) -> Option<Self::Data> {
         let count = self.0.wrapped_model.row_count();
-        self.0.wrapped_model.row_data(count - row - 1)
+        self.0.wrapped_model.row_data(count.checked_sub(row + 1)?)
     }
     fn set_row_data(&self, row: usize, data: Self::Data) {
         let count = self.0.as_ref().wrapped_model.row_count();
@@ -1088,6 +1208,10 @@ where
 
     fn model_tracker(&self) -> &dyn ModelTracker {
         &self.0.notify
+    }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
     }
 }
 
@@ -1106,7 +1230,8 @@ mod reversed_tests {
     #[test]
     fn test_reversed_model() {
         let wrapped_rc = Rc::new(VecModel::from(vec![1, 2, 3, 4]));
-        let model = ReverseModel::new(wrapped_rc.clone());
+        let model = Rc::new(ReverseModel::new(wrapped_rc.clone()));
+        let _checker = ModelChecker::new(model.clone());
 
         let observer = Box::pin(ModelChangeListenerContainer::<TestView>::default());
         model.model_tracker().attach_peer(Pin::as_ref(&observer).model_peer());
@@ -1119,7 +1244,8 @@ mod reversed_tests {
         for (idx, mapped_idx) in [(0, 4), (1, 3), (2, 2), (3, 1), (4, 0)] {
             println!("Inserting at {} expecting mapped to {}", idx, mapped_idx);
             let wrapped_rc = Rc::new(VecModel::from(vec![1, 2, 3, 4]));
-            let model = ReverseModel::new(wrapped_rc.clone());
+            let model = Rc::new(ReverseModel::new(wrapped_rc.clone()));
+            let _checker = ModelChecker::new(model.clone());
 
             let observer = Box::pin(ModelChangeListenerContainer::<TestView>::default());
             model.model_tracker().attach_peer(Pin::as_ref(&observer).model_peer());
@@ -1144,7 +1270,8 @@ mod reversed_tests {
         for (idx, mapped_idx) in [(0, 3), (1, 2), (2, 1), (3, 0)] {
             println!("Removing at {} expecting mapped to {}", idx, mapped_idx);
             let wrapped_rc = Rc::new(VecModel::from(vec![1, 2, 3, 4]));
-            let model = ReverseModel::new(wrapped_rc.clone());
+            let model = Rc::new(ReverseModel::new(wrapped_rc.clone()));
+            let _checker = ModelChecker::new(model.clone());
 
             let observer = Box::pin(ModelChangeListenerContainer::<TestView>::default());
             model.model_tracker().attach_peer(Pin::as_ref(&observer).model_peer());
@@ -1168,7 +1295,8 @@ mod reversed_tests {
         for (idx, mapped_idx) in [(0, 3), (1, 2), (2, 1), (3, 0)] {
             println!("Changing at {} expecting mapped to {}", idx, mapped_idx);
             let wrapped_rc = Rc::new(VecModel::from(vec![1, 2, 3, 4]));
-            let model = ReverseModel::new(wrapped_rc.clone());
+            let model = Rc::new(ReverseModel::new(wrapped_rc.clone()));
+            let _checker = ModelChecker::new(model.clone());
 
             let observer = Box::pin(ModelChangeListenerContainer::<TestView>::default());
             model.model_tracker().attach_peer(Pin::as_ref(&observer).model_peer());
@@ -1187,4 +1315,106 @@ mod reversed_tests {
             assert_eq!(model.row_data(mapped_idx), Some(10));
         }
     }
+
+    #[test]
+    fn test_reversed_model_source_model() {
+        let wrapped_rc = Rc::new(VecModel::from(vec![1, 2, 3, 4]));
+        let model = Rc::new(ReverseModel::new(wrapped_rc.clone()));
+        let _checker = ModelChecker::new(model.clone());
+
+        let observer = Box::pin(ModelChangeListenerContainer::<TestView>::default());
+        model.model_tracker().attach_peer(Pin::as_ref(&observer).model_peer());
+
+        model.source_model().push(5);
+
+        check_content(&model, &[5, 4, 3, 2, 1]);
+    }
+}
+
+#[test]
+fn test_long_chain_integrity() {
+    let origin_model = Rc::new(VecModel::from((0..100).collect::<Vec<_>>()));
+    let checker1 = ModelChecker::new(origin_model.clone());
+    let fizzbuzz = Rc::new(MapModel::new(origin_model.clone(), |number| {
+        if (number % 3) == 0 && (number % 5) == 0 {
+            "FizzBuzz".to_owned()
+        } else if (number % 3) == 0 {
+            "Fizz".to_owned()
+        } else if (number % 5) == 0 {
+            "Buzz".to_owned()
+        } else {
+            number.to_string()
+        }
+    }));
+    let checker2 = ModelChecker::new(fizzbuzz.clone());
+    let filter = Rc::new(FilterModel::new(fizzbuzz, |s| s != "FizzBuzz"));
+    let checker3 = ModelChecker::new(filter.clone());
+    let reverse = Rc::new(ReverseModel::new(filter));
+    let checker4 = ModelChecker::new(reverse.clone());
+    let sorted = Rc::new(SortModel::new_ascending(reverse));
+    let checker5 = ModelChecker::new(sorted.clone());
+    let filter2 = Rc::new(FilterModel::new(sorted, |s| s != "Fizz"));
+    let checker6 = ModelChecker::new(filter2.clone());
+
+    let check_all = || {
+        checker1.check();
+        checker2.check();
+        checker3.check();
+        checker4.check();
+        checker5.check();
+        checker6.check();
+    };
+
+    origin_model.extend(50..150);
+    check_all();
+    origin_model.insert(8, 1000);
+    check_all();
+    origin_model.remove(9);
+    check_all();
+    origin_model.remove(10);
+    origin_model.remove(11);
+    origin_model.set_row_data(55, 10001);
+    check_all();
+    origin_model.set_row_data(58, 10002);
+    origin_model.set_row_data(59, 10003);
+    origin_model.remove(28);
+    origin_model.remove(29);
+    origin_model.insert(100, 8888);
+    origin_model.remove(30);
+    origin_model.set_row_data(60, 10004);
+    origin_model.remove(130);
+    origin_model.set_row_data(61, 10005);
+    origin_model.remove(131);
+    check_all();
+    origin_model.remove(12);
+    origin_model.remove(13);
+    origin_model.remove(14);
+    origin_model.set_row_data(62, 10006);
+    origin_model.set_row_data(63, 10007);
+    origin_model.set_row_data(64, 10008);
+    origin_model.set_row_data(65, 10009);
+    check_all();
+
+    // Since VecModel don't have this as public API, just add some function that use row_removed on a wider range.
+    impl<T> VecModel<T> {
+        fn remove_range(&self, range: core::ops::Range<usize>) {
+            self.array.borrow_mut().drain(range.clone());
+            self.notify.row_removed(range.start, range.len())
+        }
+    }
+
+    origin_model.remove_range(25..110);
+    check_all();
+
+    origin_model.extend(900..910);
+    origin_model.set_row_data(45, 44444);
+    origin_model.remove_range(10..30);
+    origin_model.insert(45, 3000);
+    origin_model.insert(45, 3001);
+    origin_model.insert(45, 3002);
+    origin_model.insert(45, 3003);
+    origin_model.insert(45, 3004);
+    origin_model.insert(45, 3006);
+    origin_model.insert(45, 3007);
+    check_all();
 }

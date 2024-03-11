@@ -63,7 +63,7 @@ pub enum Type {
         name: Option<String>,
         /// When declared in .slint, this is the node of the declaration.
         node: Option<syntax_nodes::ObjectType>,
-        /// deriven
+        /// derived
         rust_attributes: Option<Vec<String>>,
     },
     Enumeration(Rc<Enumeration>),
@@ -413,6 +413,7 @@ impl ElementType {
                                 property_visibility: PropertyVisibility::Private,
                                 declared_pure: None,
                                 is_local_to_component: false,
+                                is_in_direct_base: false,
                             }
                         } else {
                             crate::typeregister::reserved_property(name)
@@ -424,6 +425,7 @@ impl ElementType {
                         property_visibility: p.property_visibility,
                         declared_pure: None,
                         is_local_to_component: false,
+                        is_in_direct_base: false,
                     },
                 }
             }
@@ -441,6 +443,7 @@ impl ElementType {
                     property_visibility: PropertyVisibility::InOut,
                     declared_pure: None,
                     is_local_to_component: false,
+                    is_in_direct_base: false,
                 }
             }
             _ => PropertyLookupResult {
@@ -449,6 +452,7 @@ impl ElementType {
                 property_visibility: PropertyVisibility::Private,
                 declared_pure: None,
                 is_local_to_component: false,
+                is_in_direct_base: false,
             },
         }
     }
@@ -477,23 +481,26 @@ impl ElementType {
         }
     }
 
-    pub fn lookup_type_for_child_element(
+    /// This function looks at the element and checks whether it can have Elements of type `name` as children.
+    /// It returns an Error if that is not possible or an Option of the ElementType if it is.
+    /// The option is unset when the compiler does not know the type well enough to avoid further
+    /// probing.
+    pub fn accepts_child_element(
         &self,
         name: &str,
         tr: &TypeRegister,
-    ) -> Result<ElementType, String> {
+    ) -> Result<Option<ElementType>, String> {
         match self {
             Self::Component(component) if component.child_insertion_point.borrow().is_none() => {
                 let base_type = component.root_element.borrow().base_type.clone();
                 if base_type == tr.empty_type() {
                     return Err(format!("'{}' cannot have children. Only components with @children can have children", component.id));
-                } else {
-                    return base_type.lookup_type_for_child_element(name, tr);
                 }
+                return base_type.accepts_child_element(name, tr);
             }
             Self::Builtin(builtin) => {
                 if let Some(child_type) = builtin.additional_accepted_child_types.get(name) {
-                    return Ok(child_type.clone());
+                    return Ok(Some(child_type.clone()));
                 }
                 if builtin.disallow_global_types_as_child_elements {
                     let mut valid_children: Vec<_> =
@@ -510,6 +517,21 @@ impl ElementType {
             }
             _ => {}
         };
+        Ok(None)
+    }
+
+    /// This function looks at the element and checks whether it can have Elements of type `name` as children.
+    /// In addition to what `accepts_child_element` does, this method also probes the type of `name`.
+    /// It returns an Error if that is not possible or an `ElementType` if it is.
+    pub fn lookup_type_for_child_element(
+        &self,
+        name: &str,
+        tr: &TypeRegister,
+    ) -> Result<ElementType, String> {
+        if let Some(ct) = self.accepts_child_element(name, tr)? {
+            return Ok(ct);
+        }
+
         tr.lookup_element(name).and_then(|t| {
             if !tr.expose_internal_types && matches!(&t, Self::Builtin(e) if e.is_internal) {
                 Err(format!("Unknown type {}. (The type exist as an internal type, but cannot be accessed in this scope)", name))
@@ -705,6 +727,8 @@ pub struct PropertyLookupResult<'a> {
     pub declared_pure: Option<bool>,
     /// True if the property is part of the the current component (for visibility purposes)
     pub is_local_to_component: bool,
+    /// True if the property in the direct base of the component (for visibility purposes)
+    pub is_in_direct_base: bool,
 }
 
 impl<'a> PropertyLookupResult<'a> {

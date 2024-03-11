@@ -3,8 +3,9 @@
 
 
 // main.js
-let slint = require("slint-ui");
-let ui = require("./memory.slint");
+import * as slint from "slint-ui";
+
+let ui = slint.loadFile("./memory.slint");
 let mainWindow = new ui.MainWindow();
 
 let initial_tiles = mainWindow.memory_tiles;
@@ -15,11 +16,11 @@ for (let i = tiles.length - 1; i > 0; i--) {
     [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
 }
 
-// ANCHOR: game_logic
 let model = new slint.ArrayModel(tiles);
 mainWindow.memory_tiles = model;
 
-mainWindow.check_if_pair_solved.setHandler(function () {
+// ANCHOR: game_logic
+mainWindow.check_if_pair_solved = function () {
     let flipped_tiles = [];
     tiles.forEach((tile, index) => {
         if (tile.image_visible && !tile.solved) {
@@ -41,7 +42,7 @@ mainWindow.check_if_pair_solved.setHandler(function () {
             index: tile2_index
         } = flipped_tiles[1];
 
-        let is_pair_solved = tile1.image === tile2.image;
+        let is_pair_solved = tile1.image.path === tile2.image.path;
         if (is_pair_solved) {
             tile1.solved = true;
             model.setRowData(tile1_index, tile1);
@@ -49,18 +50,16 @@ mainWindow.check_if_pair_solved.setHandler(function () {
             model.setRowData(tile2_index, tile2);
         } else {
             mainWindow.disable_tiles = true;
-            slint.Timer.singleShot(1000, () => {
+            setTimeout(() => {
                 mainWindow.disable_tiles = false;
                 tile1.image_visible = false;
                 model.setRowData(tile1_index, tile1);
                 tile2.image_visible = false;
                 model.setRowData(tile2_index, tile2);
-            })
+            }, 1000)
 
         }
     }
-});
-
-mainWindow.run();
-
+};
 // ANCHOR_END: game_logic
+await mainWindow.run();

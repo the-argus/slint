@@ -3,15 +3,14 @@
 
 use by_address::ByAddress;
 
+use super::lower_expression::ExpressionContext;
 use crate::expression_tree::Expression as tree_Expression;
 use crate::langtype::{ElementType, Type};
 use crate::llr::item_tree::*;
 use crate::namedreference::NamedReference;
 use crate::object_tree::{Component, ElementRc, PropertyVisibility};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
-
-use super::lower_expression::ExpressionContext;
 
 pub fn lower_to_item_tree(component: &Rc<Component>) -> PublicComponent {
     let mut state = LoweringState::default();
@@ -61,15 +60,17 @@ pub struct LoweringState {
 #[derive(Debug, Clone)]
 pub enum LoweredElement {
     SubComponent { sub_component_index: usize },
-    NativeItem { item_index: usize },
-    Repeated { repeated_index: usize },
-    ComponentPlaceholder { component_container_index: ComponentContainerIndex },
+    NativeItem { item_index: u32 },
+    Repeated { repeated_index: u32 },
+    ComponentPlaceholder { repeated_index: u32 },
 }
 
 #[derive(Default, Debug, Clone)]
 pub struct LoweredSubComponentMapping {
     pub element_mapping: HashMap<ByAddress<ElementRc>, LoweredElement>,
     pub property_mapping: HashMap<NamedReference, PropertyReference>,
+    pub repeater_count: u32,
+    pub container_count: u32,
 }
 
 impl LoweredSubComponentMapping {
@@ -194,6 +195,7 @@ fn lower_sub_component(
         two_way_bindings: Default::default(),
         const_properties: Default::default(),
         init_code: Default::default(),
+        geometries: Default::default(),
         // just initialize to dummy expression right now and it will be set later
         layout_info_h: super::Expression::BoolLiteral(false).into(),
         layout_info_v: super::Expression::BoolLiteral(false).into(),
@@ -259,20 +261,23 @@ fn lower_sub_component(
             });
         }
         if elem.is_component_placeholder {
-            let index = parent.as_ref().unwrap().borrow().item_index.get().copied().unwrap();
             mapping.element_mapping.insert(
                 element.clone().into(),
-                LoweredElement::ComponentPlaceholder { component_container_index: index.into() },
+                LoweredElement::ComponentPlaceholder {
+                    repeated_index: component_container_data.len() as u32,
+                },
             );
+            mapping.container_count += 1;
             component_container_data.push(parent.as_ref().unwrap().clone());
             return None;
         }
         if elem.repeated.is_some() {
             mapping.element_mapping.insert(
                 element.clone().into(),
-                LoweredElement::Repeated { repeated_index: repeated.len() },
+                LoweredElement::Repeated { repeated_index: repeated.len() as u32 },
             );
             repeated.push(element.clone());
+            mapping.repeater_count += 1;
             return None;
         }
         match &elem.base_type {
@@ -295,20 +300,14 @@ fn lower_sub_component(
             }
 
             ElementType::Native(n) => {
-                let item_index = sub_component.items.len();
+                let item_index = sub_component.items.len() as u32;
                 mapping
                     .element_mapping
                     .insert(element.clone().into(), LoweredElement::NativeItem { item_index });
-                let is_flickable_viewport = elem.is_flickable_viewport;
                 sub_component.items.push(Item {
                     ty: n.clone(),
-                    name: if is_flickable_viewport {
-                        parent.as_ref().unwrap().borrow().id.clone()
-                    } else {
-                        elem.id.clone()
-                    },
+                    name: elem.id.clone(),
                     index_in_tree: *elem.item_index.get().unwrap(),
-                    is_flickable_viewport,
                 })
             }
             _ => unreachable!(),
@@ -394,17 +393,18 @@ fn lower_sub_component(
             }
         }
     });
-    sub_component.repeated =
-        repeated.into_iter().map(|elem| lower_repeated_component(&elem, &ctx)).collect();
-    for s in &mut sub_component.sub_components {
-        s.repeater_offset += sub_component.repeated.len();
-    }
     sub_component.component_containers = component_container_data
         .into_iter()
         .map(|component_container| {
             lower_component_container(&component_container, &sub_component, &ctx)
         })
         .collect();
+    sub_component.repeated =
+        repeated.into_iter().map(|elem| lower_repeated_component(&elem, &ctx)).collect();
+    for s in &mut sub_component.sub_components {
+        s.repeater_offset +=
+            (sub_component.repeated.len() + sub_component.component_containers.len()) as u32;
+    }
 
     sub_component.popup_windows = component
         .popup_windows
@@ -464,13 +464,50 @@ fn lower_sub_component(
         })
         .collect();
 
+    crate::object_tree::recurse_elem(&component.root_element, &(), &mut |element, _| {
+        let elem = element.borrow();
+        if elem.repeated.is_some() {
+            return;
+        };
+        let Some(geom) = &elem.geometry_props else { return };
+        let item_index = *elem.item_index.get().unwrap() as usize;
+        if item_index >= sub_component.geometries.len() {
+            sub_component.geometries.resize(item_index + 1, Default::default());
+        }
+        sub_component.geometries[item_index] = Some(lower_geometry(geom, &ctx).into());
+    });
+
     LoweredSubComponent { sub_component: Rc::new(sub_component), mapping }
+}
+
+fn lower_geometry(
+    geom: &crate::object_tree::GeometryProps,
+    ctx: &ExpressionContext<'_>,
+) -> super::Expression {
+    let mut fields = BTreeMap::default();
+    let mut values = HashMap::with_capacity(4);
+    for (f, v) in [("x", &geom.x), ("y", &geom.y), ("width", &geom.width), ("height", &geom.height)]
+    {
+        fields.insert(f.into(), Type::LogicalLength);
+        values
+            .insert(f.into(), super::Expression::PropertyReference(ctx.map_property_reference(v)));
+    }
+    super::Expression::Struct {
+        ty: Type::Struct { fields, name: None, node: None, rust_attributes: None },
+        values,
+    }
 }
 
 fn get_property_analysis(elem: &ElementRc, p: &str) -> crate::object_tree::PropertyAnalysis {
     let mut a = elem.borrow().property_analysis.borrow().get(p).cloned().unwrap_or_default();
     let mut elem = elem.clone();
     loop {
+        if let Some(d) = elem.borrow().property_declarations.get(p) {
+            if let Some(nr) = &d.is_alias {
+                a.merge(&get_property_analysis(&nr.element(), nr.name()));
+            }
+            return a;
+        }
         let base = elem.borrow().base_type.clone();
         match base {
             ElementType::Native(n) => {
@@ -496,12 +533,9 @@ fn lower_repeated_component(elem: &ElementRc, ctx: &ExpressionContext) -> Repeat
     let component = e.base_type.as_component().clone();
     let repeated = e.repeated.as_ref().unwrap();
 
-    let sc = lower_sub_component(&component, ctx.state, Some(ctx));
+    let sc: LoweredSubComponent = lower_sub_component(&component, ctx.state, Some(ctx));
 
-    let map_inner_prop = |p| {
-        sc.mapping
-            .map_property_reference(&NamedReference::new(&component.root_element, p), ctx.state)
-    };
+    let geom = component.root_element.borrow().geometry_props.clone().unwrap();
 
     let listview = repeated.is_listview.as_ref().map(|lv| ListViewInfo {
         viewport_y: ctx.map_property_reference(&lv.viewport_y),
@@ -509,10 +543,9 @@ fn lower_repeated_component(elem: &ElementRc, ctx: &ExpressionContext) -> Repeat
         viewport_width: ctx.map_property_reference(&lv.viewport_width),
         listview_height: ctx.map_property_reference(&lv.listview_height),
         listview_width: ctx.map_property_reference(&lv.listview_width),
-
-        prop_y: map_inner_prop("y"),
-        prop_width: map_inner_prop("width"),
-        prop_height: map_inner_prop("height"),
+        prop_y: sc.mapping.map_property_reference(&geom.y, ctx.state),
+        prop_width: sc.mapping.map_property_reference(&geom.width, ctx.state),
+        prop_height: sc.mapping.map_property_reference(&geom.height, ctx.state),
     });
 
     RepeatedElement {
@@ -536,10 +569,12 @@ fn lower_component_container(
 ) -> ComponentContainerElement {
     let c = container.borrow();
 
-    let component_container_index: ComponentContainerIndex = (*c.item_index.get().unwrap()).into();
-    let ti = component_container_index.as_item_tree_index();
-    let component_container_items_index =
-        sub_component.items.iter().position(|i| i.index_in_tree == ti).unwrap();
+    let component_container_index = *c.item_index.get().unwrap();
+    let component_container_items_index = sub_component
+        .items
+        .iter()
+        .position(|i| i.index_in_tree == component_container_index)
+        .unwrap() as u32;
 
     ComponentContainerElement {
         component_container_item_tree_index: component_container_index,
@@ -711,6 +746,7 @@ fn make_tree(
 ) -> TreeNode {
     let e = element.borrow();
     let children = e.children.iter().map(|c| make_tree(state, c, component, sub_component_path));
+    let repeater_count = component.mapping.repeater_count;
     match component.mapping.element_mapping.get(&ByAddress(element.clone())).unwrap() {
         LoweredElement::SubComponent { sub_component_index } => {
             let sub_component = e.sub_component().unwrap();
@@ -735,6 +771,7 @@ fn make_tree(
             item_index: *item_index,
             children: children.collect(),
             repeated: false,
+            component_container: false,
         },
         LoweredElement::Repeated { repeated_index } => TreeNode {
             is_accessible: false,
@@ -742,13 +779,15 @@ fn make_tree(
             item_index: *repeated_index,
             children: vec![],
             repeated: true,
+            component_container: false,
         },
-        LoweredElement::ComponentPlaceholder { component_container_index } => TreeNode {
+        LoweredElement::ComponentPlaceholder { repeated_index } => TreeNode {
             is_accessible: false,
             sub_component_path: sub_component_path.into(),
-            item_index: component_container_index.as_repeater_index(),
+            item_index: *repeated_index + repeater_count,
             children: vec![],
-            repeated: true,
+            repeated: false,
+            component_container: true,
         },
     }
 }

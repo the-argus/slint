@@ -1,6 +1,6 @@
-# ![Slint](./logo/slint-logo-full-light.svg#gh-light-mode-only)![Slint](./logo/slint-logo-full-white.svg#gh-dark-mode-only)
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial -->
 
-<!-- cSpell: ignore ChipTrack Moiré Trolltech valign Woboq -->
+![Slint](./logo/slint-logo-full-light.svg#gh-light-mode-only) ![Slint](./logo/slint-logo-full-dark.svg#gh-dark-mode-only)
 
 [![Build Status](https://github.com/slint-ui/slint/workflows/CI/badge.svg)](https://github.com/slint-ui/slint/actions)
 [![REUSE status](https://api.reuse.software/badge/github.com/slint-ui/slint)](https://api.reuse.software/info/github.com/slint-ui/slint)
@@ -29,12 +29,15 @@ is derived from our design goals:
 
 We invite you to use Slint and be part of its community.
 
+Visit [#MadeWithSlint](https://madewithslint.com) to view some of the projects
+using Slint and join us in the Slint community.
+
 ## Current Status
 
 Slint is in active development. The state of support for each platform is as
 follows:
 
-- **Embedded**: *Ready* Slint is being used by customers in production on embedded
+- **Embedded**: *Ready*. Slint is being used by customers in production on embedded
     devices running embedded Linux and Windows. The Slint run-time requires less than
     300KiB of RAM and can run on different processor architectures such as ARM Cortex M,
     ESP32, STM32 from the MCU category to ARM Cortex A, Intel x86 from the MPU category.
@@ -44,24 +47,24 @@ follows:
     in a web browser. As there are many other web frameworks, the web platform
     is not one of our primary target platforms. The web support is currently
     limited to demo purposes.
-- **Mobile** (Android/iOS): *Todo*. We haven't started supporting mobile
-    platforms yet, but it is our intention to do so in the near future.
+- **Mobile**
+  - Android: *In Progress*. Track the progress of work here https://github.com/slint-ui/slint/issues/46.
+  - iOS: *Todo*. Support for iOS will commence after the initial support for Android is completed.
 
 ### Accessibility
 
 Slint supports keyboard based navigation of many widgets, and user interfaces
 are scalable. The basic infrastructure for assistive technology like screen
-readers is in place, but currently requires the Qt backend.
-We're aware that more work is needed to get best-of-class support for users
-with special needs.
+readers is in place. We're aware that more work is needed to get best-of-class
+support for users with special needs.
 
 ## Demos
 
 ### Embedded
 
-| RaspberryPi                         | STM32                          | RP2040                         |
-| ----------------------------------- | ------------------------------ | ------------------------------ |
-| [Video of Slint on Raspberry Pi][#1] | [Video of Slint on STM32][#2]  | [Video of Slint on RP2040][#3] |
+| RaspberryPi                          | STM32                         | RP2040                         |
+| ------------------------------------ | ----------------------------- | ------------------------------ |
+| [Video of Slint on Raspberry Pi][#1] | [Video of Slint on STM32][#2] | [Video of Slint on RP2040][#3] |
 
 ### Desktop
 
@@ -72,7 +75,7 @@ with special needs.
 ### Web using WebAssembly
 
 | Printer Demo                                | Slide Puzzle                                 | Energy Monitor                                       | Widget Gallery                                |
-| ------------------------------------------  | -------------------------------------------- | ---------------------------------------------------- | --------------------------------------------- |
+| ------------------------------------------- | -------------------------------------------- | ---------------------------------------------------- | --------------------------------------------- |
 | [![Screenshot of the Printer Demo][#7]][#8] | [![Screenshot of the Slide Puzzle][#9]][#10] | [![Screenshot of the Energy Monitor Demo][#11]][#12] | [![Screenshot of the Gallery Demo][#13]][#14] |
 
 ## Get Started
@@ -155,7 +158,8 @@ Rendering backends and styles are configurable at compile time:
 - The `skia` renderer uses [Skia](https://skia.org) for rendering.
 - The `software` renderer uses the CPU with no additional dependencies.
 
-NOTE: When Qt is installed on the system, the `native` style uses Qt's QStyle to achieve native looking widgets.
+NOTE: When Qt is installed on the system, the `qt` style becomes available,
+using Qt's QStyle to achieve native looking widgets.
 
 ### Tooling
 
@@ -168,7 +172,7 @@ We have a few tools to help with the development of .slint files:
 - A [**slint-viewer**](./tools/viewer) tool which displays the .slint files. The
   `--auto-reload` argument makes it easy to preview your UI while you are
   working on it (when using the LSP preview is not possible).
-- [**SlintPad**](https://slint.dev/editor), an online editor to try out .slint syntax
+- [**SlintPad**](https://slintpad.com/), an online editor to try out .slint syntax
   without installing anything ([sources](./tools/slintpad)).
 - An [**updater**](./tools/updater) to convert the .slint files from
   previous versions to newer versions.
@@ -176,11 +180,6 @@ We have a few tools to help with the development of .slint files:
 
 Please check our [Editors README](./editors/README.md) for tips on how to
 configure your favorite editor to work well with Slint.
-
-## #MadeWithSlint
-
-Visit <https://madewithslint.com> to view some of the projects using Slint: (Contact us or open a pull
-request on <https://github.com/slint-ui/madewithslint> to add yours).
 
 ## License
 
@@ -215,10 +214,9 @@ located remotely in Germany.
 
 ### Stay up to date
 
-- Follow [@slint-ui](https://twitter.com/slint_ui) on Twitter.
+- Follow [@slint-ui](https://twitter.com/slint_ui) on X/Twitter.
 - Follow [@slint@fosstodon.org](https://mastodon.social/@slint@fosstodon.org) on Mastodon.
 - Follow [@slint-ui](https://www.linkedin.com/company/slint-ui/) on LinkedIn.
-- Keep an eye out for our [🥠 Weekly Status Updates](https://slint.dev/thisweek/).
 
 ### Contact us
 

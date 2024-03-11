@@ -39,6 +39,12 @@ SCENARIO("SharedString API")
         REQUIRE(str == "Hello 🦊!");
         REQUIRE(std::string_view(str.data()) == "Hello 🦊!");
     }
+
+    SECTION("begin/end")
+    {
+        str = "Hello";
+        REQUIRE(str.begin() + std::string_view(str).size() == str.end());
+    }
 }
 
 TEST_CASE("Basic SharedVector API", "[vector]")
@@ -161,7 +167,7 @@ TEST_CASE("Image")
         REQUIRE(!img.path().has_value());
     }
 
-#ifdef SLINT_FEATURE_STD
+#ifndef SLINT_FEATURE_FREESTANDING
     img = Image::load_from_path(SOURCE_DIR "/../../../logo/slint-logo-square-light-128x128.png");
     {
         auto size = img.size();

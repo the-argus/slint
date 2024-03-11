@@ -49,8 +49,16 @@ pub unsafe extern "C" fn slint_ensure_backend() {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn slint_run_event_loop() {
-    with_platform(|b| b.run_event_loop()).unwrap();
+/// Enters the main event loop.
+pub extern "C" fn slint_run_event_loop(quit_on_last_window_closed: bool) {
+    with_platform(|b| {
+        if !quit_on_last_window_closed {
+            #[allow(deprecated)]
+            b.set_event_loop_quit_on_last_window_closed(false);
+        }
+        b.run_event_loop()
+    })
+    .unwrap();
 }
 
 /// Will execute the given functor in the main thread
@@ -152,7 +160,7 @@ mod allocator {
             if align <= core::mem::size_of::<usize>() {
                 malloc(layout.size()) as *mut u8
             } else {
-                // Ideally we'd use alligned_alloc, but that function caused heap corruption with esp-idf
+                // Ideally we'd use aligned_alloc, but that function caused heap corruption with esp-idf
                 let ptr = malloc(layout.size() + align) as *mut u8;
                 let shift = align - (ptr as usize % align);
                 let ptr = ptr.add(shift);

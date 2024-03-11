@@ -2,30 +2,23 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
 #![doc = include_str!("README.md")]
-#![doc(html_logo_url = "https://slint-ui.com/logo/slint-logo-square-light.svg")]
+#![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
 
 #[cfg(target_os = "linux")]
 mod fullscreenwindowadapter;
 
 #[cfg(target_os = "linux")]
-use std::os::fd::AsFd;
+use std::os::fd::OwnedFd;
 
 #[cfg(target_os = "linux")]
-type DeviceOpener<'a> = dyn Fn(&std::path::Path) -> Result<std::sync::Arc<dyn AsFd>, i_slint_core::platform::PlatformError>
+type DeviceOpener<'a> = dyn Fn(&std::path::Path) -> Result<std::rc::Rc<OwnedFd>, i_slint_core::platform::PlatformError>
     + 'a;
 
-#[cfg(target_os = "linux")]
-mod display {
-    pub trait Presenter {
-        // Present updated front-buffer to the screen
-        fn present(&self) -> Result<(), Box<dyn std::error::Error>>;
-    }
+#[cfg(all(target_os = "linux", feature = "drm"))]
+mod drmoutput;
 
-    #[cfg(any(feature = "renderer-skia-opengl", feature = "renderer-femtovg"))]
-    pub mod egldisplay;
-    #[cfg(feature = "renderer-skia-vulkan")]
-    pub mod vulkandisplay;
-}
+#[cfg(target_os = "linux")]
+mod display;
 
 #[cfg(target_os = "linux")]
 mod renderer {
@@ -41,12 +34,13 @@ mod renderer {
         Box<dyn crate::fullscreenwindowadapter::FullscreenRenderer>,
         i_slint_core::platform::PlatformError,
     > {
-        #[allow(unused_assignments)]
+        #[allow(unused_mut, unused_assignments)]
         let mut result = Err(format!("No renderer configured").into());
 
         #[cfg(any(feature = "renderer-skia-opengl", feature = "renderer-skia-vulkan"))]
         {
-            result = skia::SkiaRendererAdapter::new_try_vulkan_then_opengl(_device_opener);
+            result =
+                skia::SkiaRendererAdapter::new_try_vulkan_then_opengl_then_software(_device_opener);
         }
 
         #[cfg(feature = "renderer-femtovg")]

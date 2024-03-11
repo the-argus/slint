@@ -36,8 +36,8 @@ fn syntax_tests() -> std::io::Result<()> {
     let mut test_entries = Vec::new();
     for entry in std::fs::read_dir(format!("{}/tests/syntax", env!("CARGO_MANIFEST_DIR")))? {
         let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
+        if entry.file_type().map_or(false, |f| f.is_dir()) {
+            let path = entry.path();
             for test_entry in path.read_dir()? {
                 let test_entry = test_entry?;
                 let path = test_entry.path();
@@ -78,7 +78,7 @@ fn process_diagnostics(
     compile_diagnostics: &i_slint_compiler::diagnostics::BuildDiagnostics,
     path: &Path,
     source: &str,
-    silent: bool,
+    _silent: bool,
 ) -> std::io::Result<bool> {
     let mut success = true;
 
@@ -159,7 +159,7 @@ fn process_diagnostics(
         println!("{:?}: Unexpected errors/warnings: {:#?}", path, diags);
 
         #[cfg(feature = "display-diagnostics")]
-        if !silent {
+        if !_silent {
             let mut to_report = i_slint_compiler::diagnostics::BuildDiagnostics::default();
             for d in diags {
                 to_report.push_compiler_error(d.clone());
@@ -183,7 +183,7 @@ fn process_file_source(
 ) -> std::io::Result<bool> {
     let mut parse_diagnostics = i_slint_compiler::diagnostics::BuildDiagnostics::default();
     let syntax_node =
-        i_slint_compiler::parser::parse(source.clone(), Some(path), &mut parse_diagnostics);
+        i_slint_compiler::parser::parse(source.clone(), Some(path), None, &mut parse_diagnostics);
 
     let has_parse_error = parse_diagnostics.has_error();
     let mut compiler_config = i_slint_compiler::CompilerConfiguration::new(
@@ -192,7 +192,7 @@ fn process_file_source(
     compiler_config.enable_component_containers = true;
     compiler_config.style = Some("fluent".into());
     let compile_diagnostics = if !parse_diagnostics.has_error() {
-        let (_, build_diags) = spin_on::spin_on(i_slint_compiler::compile_syntax_node(
+        let (_, build_diags, _) = spin_on::spin_on(i_slint_compiler::compile_syntax_node(
             syntax_node.clone(),
             parse_diagnostics,
             compiler_config.clone(),

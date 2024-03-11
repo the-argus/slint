@@ -1,7 +1,9 @@
-# Generated code
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT -->
+# Generated Code
 
-The Slint compiler called by the build system will generate a header file for the root `.slint`
-file. This header file will contain a `class` with the same name as the root
+The Slint compiler [called by the build system](cmake_reference.md#slint_target_sources)
+will generate a header file for the root `.slint` file.
+This header file will contain a `class` with the same name as the root
 component.
 
 This class will have the following public member functions:
@@ -33,7 +35,7 @@ actual instance and keeps it alive as long as at least one
 
 For more complex user interfaces it's common to supply data in the form of an
 abstract data model, that's used with <a href="../slint/src/reference/repetitions.html">`for` - `in`</a>
-repetitions or <a href="../slint/src/builtins/widgets.html#listview">`ListView`</a> elements in the
+repetitions or <a href="../slint/src/language/widgets/listview">`ListView`</a> elements in the
 `.slint` language. All models in C++ are sub-classes of the
 {cpp:class}`slint::Model` and you can sub-class it yourself. For convenience,
 the {cpp:class}`slint::VectorModel` provides an implementation that's backed
@@ -44,7 +46,7 @@ by a `std::vector<T>`.
 Let's assume we've this code in our `.slint` file:
 
 ```slint,no-preview
-component SampleComponent inherits Window {
+export component SampleComponent inherits Window {
     in-out property<int> counter;
     in-out property<string> user_name;
     callback hello;
@@ -109,7 +111,7 @@ private:
 You can declare <a href="../slint/src/reference/globals.html">globally available singletons</a> in your
 `.slint` files. If exported, these singletons are available via the
 `global()` getter function on the generated C++ class. Each global singleton
-maps to a class iwith getter/setter functions for properties and callbacks,
+maps to a class with getter/setter functions for properties and callbacks,
 similar to API that's created for your `.slint` component.
 
 For example the following `.slint` markup defines a global `Logic` singleton that's also exported:

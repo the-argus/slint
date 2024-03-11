@@ -152,7 +152,7 @@ fn analyze_element(
         if binding.borrow().analysis.is_some() {
             continue;
         }
-        analyse_binding(
+        analyze_binding(
             &PropertyPath::from(NamedReference::new(elem, name)),
             context,
             reverse_aliases,
@@ -161,6 +161,12 @@ fn analyze_element(
     }
     for nr in elem.borrow().accessibility_props.0.values() {
         process_property(&PropertyPath::from(nr.clone()), context, reverse_aliases, diag);
+    }
+    if let Some(g) = elem.borrow().geometry_props.as_ref() {
+        process_property(&g.x.clone().into(), context, reverse_aliases, diag);
+        process_property(&g.y.clone().into(), context, reverse_aliases, diag);
+        process_property(&g.width.clone().into(), context, reverse_aliases, diag);
+        process_property(&g.height.clone().into(), context, reverse_aliases, diag);
     }
 
     if let Some(component) = elem.borrow().enclosing_component.upgrade() {
@@ -194,7 +200,7 @@ fn analyze_element(
 #[derive(Copy, Clone, dm::BitAnd, dm::BitOr, dm::BitAndAssign, dm::BitOrAssign)]
 struct DependsOnExternal(bool);
 
-fn analyse_binding(
+fn analyze_binding(
     current: &PropertyPath,
     context: &mut AnalysisContext,
     reverse_aliases: &ReverseAliases,
@@ -210,7 +216,7 @@ fn analyse_binding(
             .borrow()
             .span
             .clone()
-            .or_else(|| element.borrow().node.as_ref().map(|n| n.to_source_location()));
+            .unwrap_or_else(|| element.borrow().to_source_location());
         diag.push_error(format!("Property '{name}' cannot refer to itself"), &span);
         return depends_on_external;
     }
@@ -225,11 +231,9 @@ fn analyse_binding(
                 break;
             }
 
-            let span =
-                binding.span.clone().or_else(|| elem.node.as_ref().map(|n| n.to_source_location()));
             diag.push_error(
                 format!("The binding for the property '{}' is part of a binding loop", p.name()),
-                &span,
+                &binding.span.clone().unwrap_or_else(|| elem.to_source_location()),
             );
 
             if it == current {
@@ -342,7 +346,7 @@ fn process_property(
     loop {
         let element = prop.prop.element();
         if element.borrow().bindings.contains_key(prop.prop.name()) {
-            analyse_binding(&prop, context, reverse_aliases, diag);
+            analyze_binding(&prop, context, reverse_aliases, diag);
         }
         let next = if let ElementType::Component(base) = &element.borrow().base_type {
             if element.borrow().property_declarations.contains_key(prop.prop.name()) {

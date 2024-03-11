@@ -11,13 +11,14 @@ use std::rc::{Rc, Weak};
 
 use i_slint_common::sharedfontdb;
 use i_slint_core::api::{RenderingNotifier, RenderingState, SetRenderingNotifierError};
+use i_slint_core::graphics::BorderRadius;
 use i_slint_core::graphics::FontRequest;
 use i_slint_core::graphics::{euclid, rendering_metrics_collector::RenderingMetricsCollector};
 use i_slint_core::item_rendering::ItemRenderer;
 use i_slint_core::lengths::{
     LogicalLength, LogicalPoint, LogicalRect, LogicalSize, PhysicalPx, ScaleFactor,
 };
-use i_slint_core::platform::{OpenGLInterface, PlatformError};
+use i_slint_core::platform::PlatformError;
 use i_slint_core::renderer::RendererSealed;
 use i_slint_core::window::{WindowAdapter, WindowInner};
 use i_slint_core::Brush;
@@ -26,6 +27,7 @@ type PhysicalLength = euclid::Length<f32, PhysicalPx>;
 type PhysicalRect = euclid::Rect<f32, PhysicalPx>;
 type PhysicalSize = euclid::Size2D<f32, PhysicalPx>;
 type PhysicalPoint = euclid::Point2D<f32, PhysicalPx>;
+type PhysicalBorderRadius = BorderRadius<f32, PhysicalPx>;
 
 use self::itemrenderer::CanvasRc;
 
@@ -33,15 +35,46 @@ mod fonts;
 mod images;
 mod itemrenderer;
 
+/// This trait describes the interface GPU accelerated renderers in Slint require to render with OpenGL.
+///
+/// It serves the purpose to ensure that the OpenGL context is current before running any OpenGL
+/// commands, as well as providing access to the OpenGL implementation by function pointers.
+///
+/// # Safety
+///
+/// This trait is unsafe because an implementation of get_proc_address could return dangling
+/// pointers. In practice an implementation of this trait should just forward to the EGL/WGL/CGL
+/// C library that implements EGL/CGL/WGL.
+#[allow(unsafe_code)]
+pub unsafe trait OpenGLInterface {
+    /// Ensures that the OpenGL context is current when returning from this function.
+    fn ensure_current(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    /// This function is called by the renderers when all OpenGL commands have been issued and
+    /// the back buffer is reading for on-screen presentation. Typically implementations forward
+    /// this to platform specific APIs such as eglSwapBuffers.
+    fn swap_buffers(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    /// This function is called by the renderers when the surface needs to be resized, typically
+    /// in response to the windowing system notifying of a change in the window system.
+    /// For most implementations this is a no-op, with the exception for wayland for example.
+    fn resize(
+        &self,
+        width: NonZeroU32,
+        height: NonZeroU32,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    /// Returns the address of the OpenGL function specified by name, or a null pointer if the
+    /// function does not exist.
+    fn get_proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void;
+}
+
 #[cfg(target_arch = "wasm32")]
 struct WebGLNeedsNoCurrentContext;
 #[cfg(target_arch = "wasm32")]
 unsafe impl OpenGLInterface for WebGLNeedsNoCurrentContext {
-    fn ensure_current(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn ensure_current(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
     }
 
-    fn swap_buffers(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn swap_buffers(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
     }
 
@@ -49,7 +82,7 @@ unsafe impl OpenGLInterface for WebGLNeedsNoCurrentContext {
         &self,
         _width: NonZeroU32,
         _height: NonZeroU32,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
     }
 
@@ -140,11 +173,19 @@ impl FemtoVGRenderer {
 
     /// Render the scene using OpenGL.
     pub fn render(&self) -> Result<(), i_slint_core::platform::PlatformError> {
-        self.internal_render_with_post_callback(None)
+        self.internal_render_with_post_callback(
+            0.,
+            (0., 0.),
+            self.window_adapter()?.window().size(),
+            None,
+        )
     }
 
     fn internal_render_with_post_callback(
         &self,
+        rotation_angle_degrees: f32,
+        translation: (f32, f32),
+        surface_size: i_slint_core::api::PhysicalSize,
         post_render_cb: Option<&dyn Fn(&mut dyn ItemRenderer)>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
         self.opengl_context.ensure_current()?;
@@ -162,10 +203,10 @@ impl FemtoVGRenderer {
 
         let window_adapter = self.window_adapter()?;
         let window = window_adapter.window();
-        let size = window.size();
+        let window_size = window.size();
 
         let Some((width, height)): Option<(NonZeroU32, NonZeroU32)> =
-            size.width.try_into().ok().zip(size.height.try_into().ok())
+            window_size.width.try_into().ok().zip(window_size.height.try_into().ok())
         else {
             // Nothing to render
             return Ok(());
@@ -184,18 +225,25 @@ impl FemtoVGRenderer {
                     // We pass an integer that is greater than or equal to the scale factor as
                     // dpi / device pixel ratio as the anti-alias of femtovg needs that to draw text clearly.
                     // We need to care about that `ceil()` when calculating metrics.
-                    femtovg_canvas.set_size(width.get(), height.get(), scale);
+                    femtovg_canvas.set_size(surface_size.width, surface_size.height, scale);
 
                     // Clear with window background if it is a solid color otherwise it will drawn as gradient
                     if let Some(Brush::SolidColor(clear_color)) = window_background_brush {
                         femtovg_canvas.clear_rect(
                             0,
                             0,
-                            width.get(),
-                            height.get(),
+                            surface_size.width,
+                            surface_size.height,
                             self::itemrenderer::to_femtovg_color(&clear_color),
                         );
                     }
+                }
+
+                {
+                    let mut femtovg_canvas = self.canvas.borrow_mut();
+                    femtovg_canvas.reset();
+                    femtovg_canvas.rotate(rotation_angle_degrees.to_radians());
+                    femtovg_canvas.translate(translation.0, translation.1);
                 }
 
                 if let Some(notifier_fn) = self.rendering_notifier.borrow_mut().as_mut() {
@@ -214,6 +262,8 @@ impl FemtoVGRenderer {
                     })?;
                 }
 
+                self.graphics_cache.clear_cache_if_scale_factor_changed(window);
+
                 let mut item_renderer = self::itemrenderer::GLItemRenderer::new(
                     &self.canvas,
                     &self.graphics_cache,
@@ -229,7 +279,7 @@ impl FemtoVGRenderer {
                     Some(brush) => {
                         item_renderer.draw_rect(
                             i_slint_core::lengths::logical_size_from_api(
-                                size.to_logical(window_inner.scale_factor()),
+                                window.size().to_logical(window_inner.scale_factor()),
                             ),
                             brush,
                         );
@@ -309,6 +359,7 @@ impl FemtoVGRenderer {
     }
 }
 
+#[doc(hidden)]
 impl RendererSealed for FemtoVGRenderer {
     fn text_size(
         &self,
@@ -466,7 +517,7 @@ impl RendererSealed for FemtoVGRenderer {
 
     fn free_graphics_resources(
         &self,
-        component: i_slint_core::component::ComponentRef,
+        component: i_slint_core::item_tree::ItemTreeRef,
         _items: &mut dyn Iterator<Item = Pin<i_slint_core::items::ItemRef<'_>>>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
         self.opengl_context.ensure_current()?;
@@ -514,18 +565,31 @@ impl Drop for FemtoVGRenderer {
     }
 }
 
+#[doc(hidden)]
 pub trait FemtoVGRendererExt {
-    fn render_with_post_callback(
+    fn render_transformed_with_post_callback(
         &self,
+        rotation_angle_degrees: f32,
+        translation: (f32, f32),
+        surface_size: i_slint_core::api::PhysicalSize,
         post_render_cb: Option<&dyn Fn(&mut dyn ItemRenderer)>,
     ) -> Result<(), i_slint_core::platform::PlatformError>;
 }
 
+#[doc(hidden)]
 impl FemtoVGRendererExt for FemtoVGRenderer {
-    fn render_with_post_callback(
+    fn render_transformed_with_post_callback(
         &self,
+        rotation_angle_degrees: f32,
+        translation: (f32, f32),
+        surface_size: i_slint_core::api::PhysicalSize,
         post_render_cb: Option<&dyn Fn(&mut dyn ItemRenderer)>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
-        self.internal_render_with_post_callback(post_render_cb)
+        self.internal_render_with_post_callback(
+            rotation_angle_degrees,
+            translation,
+            surface_size,
+            post_render_cb,
+        )
     }
 }

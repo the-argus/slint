@@ -3,14 +3,13 @@
 
 // This file is the entry point for the vscode extension (not the browser one)
 
-// cSpell: ignore aarch armv gnueabihf vsix
+// cSpell: ignore codespace codespaces gnueabihf vsix
 
 import * as path from "path";
 import { existsSync } from "fs";
 import * as vscode from "vscode";
 
 import { PropertiesViewProvider } from "./properties_webview";
-import * as wasm_preview from "./wasm_preview";
 import * as common from "./common";
 
 import {
@@ -20,7 +19,6 @@ import {
     State,
 } from "vscode-languageclient/node";
 
-let client = new common.ClientHandle();
 let statusBar: vscode.StatusBarItem;
 let properties_provider: PropertiesViewProvider;
 
@@ -67,13 +65,23 @@ function lspPlatform(): Platform | null {
         }
     } else if (process.platform === "win32") {
         return {
-            program_name: "slint-lsp-x86_64-pc-windows-gnu.exe",
+            program_name: "slint-lsp-x86_64-pc-windows-msvc.exe",
         };
     }
     return null;
 }
 
-function startClient(context: vscode.ExtensionContext) {
+// Please add changes to the BaseLanguageClient via
+// `client.add_updater((cl: BaseLanguageClient | null): void)`
+//
+// That makes sure the code is run even when the LSP gets restarted, etc.
+//
+// Please add setup common between web and native VSCode by adding updaters
+// to the client in common.ts!
+function startClient(
+    client: common.ClientHandle,
+    context: vscode.ExtensionContext,
+) {
     let lsp_platform = lspPlatform();
     if (lsp_platform === null) {
         return;
@@ -132,83 +140,64 @@ function startClient(context: vscode.ExtensionContext) {
         debug: { command: serverModule, options: options, args: args },
     };
 
-    const clientOptions = common.languageClientOptions(
-        (args: any) => {
+    // Add setup common between native and wasm LSP to common.setup_client_handle!
+    client.add_updater((cl) => {
+        cl?.onNotification(common.serverStatus, (params: any) =>
+            common.setServerStatus(params, statusBar),
+        );
+
+        cl?.onDidChangeState((event) => {
+            let properly_stopped = cl.hasOwnProperty("slint_stopped");
             if (
-                vscode.workspace
-                    .getConfiguration("slint")
-                    .get<boolean>("preview.providedByEditor")
+                !properly_stopped &&
+                event.newState === State.Stopped &&
+                event.oldState === State.Running
             ) {
-                wasm_preview.showPreview(
-                    context,
-                    vscode.Uri.parse(args[0], true),
-                    args[1],
+                cl.outputChannel.appendLine(
+                    "The Slint Language Server crashed. This is a bug.\nPlease open an issue on https://github.com/slint-ui/slint/issues",
                 );
-                return true;
+                cl.outputChannel.show();
+                vscode.commands.executeCommand("workbench.action.output.focus");
+                vscode.window.showErrorMessage(
+                    "The Slint Language Server crashed! Please open a bug on the Slint bug tracker with the panic message.",
+                );
             }
-            return false;
-        },
-        (_) => {
-            if (
-                vscode.workspace
-                    .getConfiguration("slint")
-                    .get<boolean>("preview.providedByEditor")
-            ) {
-                wasm_preview.toggleDesignMode();
-                return true;
-            }
-            return false;
-        },
-    );
+        });
+    });
 
     const cl = new LanguageClient(
         "slint-lsp",
         "Slint LSP",
         serverOptions,
-        clientOptions,
+        common.languageClientOptions(),
     );
 
-    cl.onDidChangeState((event) => {
-        let properly_stopped = cl.hasOwnProperty("slint_stopped");
-        if (
-            !properly_stopped &&
-            event.newState === State.Stopped &&
-            event.oldState === State.Running
-        ) {
-            cl.outputChannel.appendLine(
-                "The Slint Language Server crashed. This is a bug.\nPlease open an issue on https://github.com/slint-ui/slint/issues",
-            );
-            cl.outputChannel.show();
-            vscode.commands.executeCommand("workbench.action.output.focus");
-            vscode.window.showErrorMessage(
-                "The Slint Language Server crashed! Please open a bug on the Slint bug tracker with the panic message.",
-            );
-        }
-    });
+    common.prepare_client(cl);
 
-    cl.start();
-    client.client = cl;
-
-    let initClient = () => {
-        wasm_preview.initClientForPreview(cl);
-
-        properties_provider.refresh_view();
-        cl.onNotification(common.serverStatus, (params: any) =>
-            common.setServerStatus(params, statusBar),
-        );
-    };
-    cl.onReady().then(initClient);
+    cl.start().then(() => (client.client = cl));
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    // Disable native preview in Codespace.
+    //
+    // We want to have a good default (WASM preview), but we also need to
+    // support users that have special setup in place that allows them to run
+    // the native previewer remotely.
     if (process.env.hasOwnProperty("CODESPACES")) {
-        vscode.workspace.getConfiguration("slint").update("preview.providedByEditor", true, vscode.ConfigurationTarget.Global);
+        vscode.workspace
+            .getConfiguration("slint")
+            .update(
+                "preview.providedByEditor",
+                true,
+                vscode.ConfigurationTarget.Global,
+            );
     }
-    [statusBar, properties_provider] = common.activate(context, client, (ctx) =>
-        startClient(ctx),
+
+    [statusBar, properties_provider] = common.activate(context, (cl, ctx) =>
+        startClient(cl, ctx),
     );
 }
 
 export function deactivate(): Thenable<void> | undefined {
-    return common.deactivate(client);
+    return common.deactivate();
 }

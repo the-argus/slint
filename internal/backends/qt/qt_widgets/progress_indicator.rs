@@ -9,10 +9,6 @@ use super::*;
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeProgressIndicator {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     pub indeterminate: Property<bool>,
     pub progress: Property<f32>,
     widget_ptr: std::cell::Cell<SlintTypeErasedWidgetPtr>,
@@ -27,13 +23,6 @@ impl Item for NativeProgressIndicator {
             cpp! { unsafe [animation_tracker_property_ptr as "void*"] -> SlintTypeErasedWidgetPtr as "std::unique_ptr<SlintTypeErasedWidget>"  {
                 return make_unique_animated_widget<QProgressBar>(animation_tracker_property_ptr);
             }},
-        )
-    }
-
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
         )
     }
 
@@ -65,11 +54,15 @@ impl Item for NativeProgressIndicator {
         });
 
         match orientation {
-            Orientation::Horizontal => {
-                LayoutInfo { min: size.width as f32, stretch: 1., ..LayoutInfo::default() }
-            }
+            Orientation::Horizontal => LayoutInfo {
+                min: size.width as f32,
+                preferred: size.width as f32,
+                stretch: 1.,
+                ..LayoutInfo::default()
+            },
             Orientation::Vertical => LayoutInfo {
                 min: size.height as f32,
+                preferred: size.height as f32,
                 max: size.height as f32,
                 ..LayoutInfo::default()
             },
@@ -126,8 +119,8 @@ impl Item for NativeProgressIndicator {
         ] {
             QPainter *painter_ = painter->get();
             QStyleOptionProgressBar option;
-            option.initFrom(widget);
-            option.state |= QStyle::State(initial_state) | QStyle::State_Horizontal;
+            option.styleObject = widget;
+            option.state |= QStyle::State(initial_state) | QStyle::State_Horizontal |  QStyle::State_Enabled;
             option.rect = QRect(QPoint(), size / dpr);
             option.maximum = progress < 0 ? 0 : 100;
             option.minimum = 0;

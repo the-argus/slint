@@ -1,23 +1,39 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-import { Palette, Typography, Icons } from "styling.slint";
+import { MaterialPalette, MaterialFontSettings, Icons } from "styling.slint";
+import { SpinBoxBase } from "../common/spinbox-base.slint";
 
 component SpinBoxButton inherits Rectangle {
-    callback clicked <=> i-touch-area.clicked;
-
     in-out property <bool> pressed: self.enabled && i-touch-area.pressed;
     in-out property <bool> enabled <=> i-touch-area.enabled;
     in-out property <float> icon-opacity: 1;
-    in-out property <brush> icon-fill: Palette.on-primary;
+    in-out property <brush> icon-fill: MaterialPalette.accent-foreground;
+
+    callback clicked <=> i-touch-area.clicked;
 
     width: root.height;
+
+    states [
+        disabled when !root.enabled : {
+            i-background.background: MaterialPalette.control-foreground;
+            i-background.opacity: 0.12;
+            icon-opacity: 0.38;
+            icon-fill: MaterialPalette.control-foreground;
+        }
+        pressed when i-touch-area.pressed : {
+            i-state-layer.opacity: 0.12;
+        }
+        hover when i-touch-area.has-hover : {
+            i-state-layer.opacity: 0.08;
+        }
+    ]
 
     i-background := Rectangle {
         width: 100%;
         height: 100%;
         border-radius: max(self.width, self.height) / 2;
-        background: Palette.primary;
+        background: MaterialPalette.accent-background;
     }
 
     i-state-layer := Rectangle {
@@ -27,7 +43,7 @@ component SpinBoxButton inherits Rectangle {
         width: i-background.width;
         height: i-background.height;
         border-radius: i-background.border-radius;
-        background: Palette.on-primary;
+        background: MaterialPalette.accent-foreground;
 
         animate opacity { duration: 250ms; easing: ease; }
      }
@@ -40,172 +56,101 @@ component SpinBoxButton inherits Rectangle {
     }
 
     i-touch-area := TouchArea { }
-
-    states [
-        disabled when !root.enabled : {
-            i-background.background: Palette.on-surface;
-            i-background.opacity: 0.12;
-            icon-opacity: 0.38;
-            icon-fill: Palette.on-surface;
-        }
-        pressed when i-touch-area.pressed : {
-            i-state-layer.opacity: 0.12;
-        }
-        hover when i-touch-area.has-hover : {
-            i-state-layer.opacity: 0.08;
-        }
-    ]
 }
 
 // Increment and decrement a value in the given range.
 export component SpinBox {
-    callback edited(int /* value */);
+    in property <int> minimum <=> i-base.minimum;
+    in property <int> maximum <=> i-base.maximum;
+    in property <bool> enabled <=> i-base.enabled;
+    out property <bool> has-focus <=> i-base.has-focus;
+    in-out property <int> value <=> i-base.value;
 
-    in property <int> minimum;
-    in property <int> maximum: 100;
-    in property <bool> enabled <=> i-focus-scope.enabled;
-    out property <bool> has-focus <=> i-focus-scope.has-focus;
-    in-out property <int> value;
+    callback edited <=> i-base.edited;
 
-    forward-focus: i-focus-scope;
+    forward-focus: i-base;
     horizontal-stretch: 1;
     vertical-stretch: 0;
+    min-width: i-layout.min-width;
     min-height: max(56px, i-layout.min-height);
-
     accessible-role: spinbox;
     accessible-value: root.value;
     accessible-value-minimum: root.minimum;
     accessible-value-maximum: root.maximum;
     accessible-value-step: (root.maximum - root.minimum) / 100;
 
-    i-focus-scope := FocusScope {
-        key-pressed(event) => {
-            if (root.enabled && event.text == Key.UpArrow && root.value < root.maximum) {
-                root.value += 1;
-                root.edited(value);
-                accept
-            } else if (root.enabled && event.text == Key.DownArrow && root.value > root.minimum) {
-                root.value -= 1;
-                root.edited(value);
-                accept
-            } else {
-                reject
-            }
-        }
-    }
-
-    i-background := Rectangle {
-        width: 100%;
-        height: 100%;
-        border-radius: 4px;
-        border-width: 1px;
-        border-color: Palette.outline;
-    }
-
-    i-layout := HorizontalLayout {
-        padding-top: 8px;
-        padding-bottom: 8px;
-        padding-left: 16px;
-        padding-right: 12px;
-        spacing: 16px;
-
-        Rectangle {
-            clip: true;
-
-            i-text-input := TextInput {
-                text: root.value;
-                height: 100%;
-                color: Palette.on-surface;
-                vertical-alignment: center;
-                // FIXME after Roboto font can be loaded
-                //font-family: Typography.body-large.font;
-                font-size: Typography.body-large.font-size;
-                font-weight: Typography.body-large.font-weight;
-
-                accepted => {
-                    if (!self.text.is-float()) {
-                        self.text = root.value;
-                    }
-                }
-
-                edited => {
-                    if (self.text.is-float()) {
-                        root.update-value(self.text.to-float());
-                    }
-                }
-            }
-
-            i-touch-area := TouchArea {
-                clicked => {
-                    i-text-input.focus();
-                }
-            }
-        }
-
-        VerticalLayout {
-            spacing: 4px;
-
-            SpinBoxButton {
-                enabled: root.enabled;
-
-                Image {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    source: Icons.arrow-drop-up;
-                    opacity: parent.icon-opacity;
-                    colorize: parent.icon-fill;
-                }
-
-                clicked => {
-                    root.increment();
-                }
-            }
-
-            SpinBoxButton {
-                enabled: root.enabled;
-
-                Image {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    source: Icons.arrow-drop-down;
-                    opacity: parent.icon-opacity;
-                    colorize: parent.icon-fill;
-                }
-
-                clicked => {
-                    root.decrement();
-                }
-            }
-        }
-    }
-
-    function update-value(value: int) {
-        if (value >= root.minimum && value <= root.maximum) {
-            root.value = value;
-            root.edited(value);
-        }
-
-        i-text-input.text = root.value;
-    }
-
-    function increment() {
-        root.update-value(root.value + 1);
-    }
-
-    function decrement() {
-        root.update-value(root.value - 1);
-    }
-
     states [
         disabled when !root.enabled : {
-            i-background.border-color: Palette.on-surface;
+            i-background.border-color: MaterialPalette.control-foreground;
             i-background.opacity: 0.38;
-            i-text-input.opacity: 0.38;
+            i-base.opacity: 0.38;
         }
         focused when root.has-focus : {
             i-background.border-width: 2px;
-            i-background.border-color: Palette.primary;
-            i-text-input.color: Palette.primary;
+            i-background.border-color: MaterialPalette.accent-background;
+            i-base.color: MaterialPalette.accent-background;
         }
     ]
+
+    i-background := Rectangle {
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: MaterialPalette.border;
+
+        i-layout := HorizontalLayout {
+            padding-top: 8px;
+            padding-bottom: 8px;
+            padding-left: 16px;
+            padding-right: 12px;
+            spacing: 16px;
+
+            Rectangle {
+                clip: true;
+                horizontal-stretch: 1;
+
+                i-base := SpinBoxBase {
+                    width: 100%;
+                    color: MaterialPalette.control-foreground;
+                    font-size: MaterialFontSettings.body-large.font-size;
+                    font-weight: MaterialFontSettings.body-large.font-weight;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 4px;
+
+                SpinBoxButton {
+                    enabled: root.enabled;
+
+                    Image {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        source: Icons.arrow-drop-up;
+                        opacity: parent.icon-opacity;
+                        colorize: parent.icon-fill;
+                    }
+
+                    clicked => {
+                        i-base.increment();
+                    }
+                }
+
+                SpinBoxButton {
+                    enabled: root.enabled;
+
+                    Image {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        source: Icons.arrow-drop-down;
+                        opacity: parent.icon-opacity;
+                        colorize: parent.icon-fill;
+                    }
+
+                    clicked => {
+                        i-base.decrement();
+                    }
+                }
+            }
+        }
+    }
 }

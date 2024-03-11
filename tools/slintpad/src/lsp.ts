@@ -1,14 +1,13 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-// cSpell: ignore winit
-
 import { FilterProxyReader } from "./proxy";
 import {
     CloseAction,
     ErrorAction,
     Message,
     MessageTransports,
+    NotificationMessage,
     RequestMessage,
     ResponseMessage,
 } from "vscode-languageclient";
@@ -21,12 +20,10 @@ import {
     MessageWriter,
 } from "vscode-languageserver-protocol/browser";
 
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
+import slint_init, * as slint_preview from "@lsp/slint_lsp_wasm.js";
 
-import slint_init, * as slint_preview from "@preview/slint_wasm_interpreter.js";
-import { HighlightRequestCallback } from "./text";
-
-let is_event_loop_running = false;
+import type { ResourceUrlMapperFunction } from "@lsp/slint_lsp_wasm.js";
+export { ResourceUrlMapperFunction };
 
 function createLanguageClient(
     transports: MessageTransports,
@@ -55,15 +52,10 @@ function createLanguageClient(
 export type FileReader = (_url: string) => Promise<string>;
 
 export class LspWaiter {
-    #previewer_port: MessagePort;
     #previewer_promise: Promise<slint_preview.InitOutput> | null;
     #lsp_promise: Promise<Worker> | null;
 
     constructor() {
-        const lsp_previewer_channel = new MessageChannel();
-        const lsp_side = lsp_previewer_channel.port1;
-        this.#previewer_port = lsp_previewer_channel.port2;
-
         const worker = new Worker(
             new URL("worker/lsp_worker.ts", import.meta.url),
             { type: "module" },
@@ -77,7 +69,6 @@ export class LspWaiter {
                 }
             };
         });
-        worker.postMessage(lsp_side, [lsp_side]);
 
         this.#previewer_promise = slint_init();
     }
@@ -90,319 +81,25 @@ export class LspWaiter {
         const pp = this.#previewer_promise!;
         this.#previewer_promise = null;
 
-        const [_, worker] = await Promise.all([pp, lp]);
+        const [_1, worker] = await Promise.all([pp, lp]);
 
-        return Promise.resolve(new Lsp(worker, this.#previewer_port));
+        return Promise.resolve(new Lsp(worker));
     }
 }
 
-type LoadUrlReply =
-    | { type: "Content"; data: string }
-    | { type: "Error"; data: string };
-type RenderReply =
-    | { type: "LoadUrl"; data: string }
-    | { type: "Error"; data: string }
-    | { type: "Result"; data: monaco.editor.IMarkerData[] };
-type BackendChatter =
-    | { type: "ErrorReport"; data: string }
-    | {
-          type: "HighlightRequest";
-          url: string;
-          start: { line: number; column: number };
-          end: { line: number; column: number };
-      };
-
-type HighlightInfo = { file: string; offset: number };
-type InstanceCallback<R> = (_instance: slint_preview.WrappedInstance) => R;
-
-class PreviewerBackend {
-    #client_port: MessagePort;
-    #lsp_port: MessagePort;
-    #canvas_id: string | null = null;
-    #instance: Promise<slint_preview.WrappedInstance> | null = null;
-    #to_highlight: HighlightInfo = { file: "", offset: 0 };
-    #picker_mode = false;
-
-    constructor(client_port: MessagePort, lsp_port: MessagePort) {
-        this.#lsp_port = lsp_port;
-        this.#lsp_port.onmessage = (m) => {
-            if (m.data.command === "highlight") {
-                this.highlight(m.data.data.path, m.data.data.offset);
-            }
-        };
-
-        this.#client_port = client_port;
-        this.#client_port.onmessage = (m) => {
-            try {
-                if (m.data.command === "set_picker_mode") {
-                    this.picker_mode = m.data.mode;
-                }
-                if (m.data.command === "set_canvas_id") {
-                    this.canvas_id = m.data.canvas_id;
-                }
-                if (m.data.command === "render") {
-                    const port = m.ports[0];
-
-                    this.render(
-                        m.data.style,
-                        m.data.source,
-                        m.data.base_url,
-                        (url: string) => {
-                            return new Promise((resolve, reject) => {
-                                const channel = new MessageChannel();
-                                channel.port1.onmessage = (m) => {
-                                    const reply = m.data as LoadUrlReply;
-                                    if (reply.type == "Error") {
-                                        channel.port1.close();
-                                        reject(reply.data);
-                                    } else if (reply.type == "Content") {
-                                        channel.port1.close();
-                                        resolve(reply.data);
-                                    }
-                                };
-                                port.postMessage(
-                                    { type: "LoadUrl", data: url },
-                                    [channel.port2],
-                                );
-                            });
-                        },
-                    )
-                        .then((diagnostics) => {
-                            // Re-apply highlight:
-                            this.highlight(
-                                this.#to_highlight.file,
-                                this.#to_highlight.offset,
-                            );
-
-                            port.postMessage({
-                                type: "Result",
-                                data: diagnostics,
-                            });
-                            port.close();
-                        })
-                        .catch((e) => {
-                            port.postMessage({ type: "Error", data: e });
-                            port.close();
-                        })
-                }
-            } catch (e) {
-                client_port.postMessage({ type: "Error", data: e });
-            }
-        };
-    }
-
-    set picker_mode(state: boolean) {
-        this.#picker_mode = state;
-        this.configure_picker_mode();
-    }
-
-    protected async configure_picker_mode() {
-        await this.with_instance((instance) => {
-            instance.on_element_selected(
-                (
-                    url: string,
-                    start_line: number,
-                    start_column: number,
-                    end_line: number,
-                    end_column: number,
-                ) => {
-                    this.#client_port.postMessage({
-                        type: "HighlightRequest",
-                        url: url,
-                        start: { line: start_line, column: start_column },
-                        end: { line: end_line, column: end_column },
-                    });
-                },
-            );
-            instance.set_design_mode(this.#picker_mode);
-        })
-    }
-
-    private async with_instance<R>(callback: InstanceCallback<R>): Promise<R | null> {
-        if (this.#instance == null) {
-            return null;
-        }
-        return callback(await this.#instance);
-    }
-
-    set canvas_id(id: string | null) {
-        this.#canvas_id = id;
-    }
-
-    get canvas_id() {
-        return this.#canvas_id;
-    }
-
-    private async render(
-        style: string,
-        source: string,
-        base_url: string,
-        load_callback: (_url: string) => Promise<string>,
-    ): Promise<monaco.editor.IMarkerData[]> {
-        if (this.#canvas_id == null) {
-            return Promise.resolve([]);
-        }
-
-        const { component, diagnostics, error_string } =
-            await slint_preview.compile_from_string_with_style(
-                source,
-                base_url,
-                style,
-                load_callback,
-            );
-
-        this.#client_port.postMessage({
-            type: "ErrorReport",
-            data: error_string,
-        });
-
-        const markers = diagnostics.map(function (x) {
-            return {
-                severity: 3 - x.level,
-                message: x.message,
-                source: x.fileName,
-                startLineNumber: x.lineNumber,
-                startColumn: x.columnNumber,
-                endLineNumber: x.lineNumber,
-                endColumn: -1,
-            };
-        });
-
-        if (component != null) {
-            // It's not enough for the canvas element to exist, in order to extract a webgl rendering
-            // context, the element needs to be attached to the window's dom.
-            if (this.#instance == null) {
-                try {
-                    if (!is_event_loop_running) {
-                        slint_preview.run_event_loop();
-                        // this will trigger a JS exception, so this line will never be reached!
-                    }
-                } catch (e) {
-                    // The winit event loop, when targeting wasm, throws a JavaScript exception to break out of
-                    // Rust without running any destructors. Don't rethrow the exception but swallow it, as
-                    // this is no error and we truly want to resolve the promise of this function by returning
-                    // the model markers.
-                    is_event_loop_running = true; // Assume the winit caused the exception and that the event loop is up now
-                }
-                this.#instance = (async () => {
-                    let new_instance = await component.create(this.canvas_id!); // eslint-disable-line
-                    await new_instance.show();
-                    return new_instance;
-                })();
-            } else {
-                this.#instance = component.create_with_existing_window(
-                    await this.#instance,
-                );
-                await this.configure_picker_mode();
-            }
-        }
-
-        return Promise.resolve(markers);
-    }
-
-    private async highlight(file_path: string, offset: number) {
-        this.#to_highlight = { file: file_path, offset: offset };
-        this.with_instance((instance) => instance.highlight(file_path, offset))
-    }
-}
-
-// TODO: Remove this again and hide this behind the LSP.
 export class Previewer {
-    #channel: MessagePort;
-    #canvas_id: string | null = null;
-    #on_error: (_error: string) => void = () => {
-        return;
-    };
-    #on_highlight_request: HighlightRequestCallback = (_u, _s, _e) => {
-        return;
-    };
+    #preview_connector: slint_preview.PreviewConnector;
 
-    constructor(channel: MessagePort) {
-        this.#channel = channel;
-        channel.onmessage = (m) => {
-            const data = m.data as BackendChatter;
-            if (data.type == "ErrorReport") {
-                this.#on_error(data.data);
-            } else if (data.type == "HighlightRequest") {
-                this.#on_highlight_request(data.url, data.start, data.end);
-            }
-        };
+    constructor(connector: slint_preview.PreviewConnector) {
+        this.#preview_connector = connector;
     }
 
-    get canvas_id() {
-        return this.#canvas_id;
+    show_ui(): Promise<void> {
+        return this.#preview_connector.show_ui();
     }
 
-    set canvas_id(id: string | null) {
-        this.#canvas_id = id;
-        this.#channel.postMessage({ command: "set_canvas_id", canvas_id: id });
-    }
-
-    set picker_mode(state: boolean) {
-        this.#channel.postMessage({ command: "set_picker_mode", mode: state });
-    }
-
-    set on_highlight_request(cb: HighlightRequestCallback) {
-        this.#on_highlight_request = cb;
-    }
-
-    set on_error(callback: (_error: string) => void) {
-        this.#on_error = callback;
-    }
-
-    public async render(
-        style: string,
-        source: string,
-        base_url: string,
-        load_callback: (_url: string) => Promise<string>,
-    ): Promise<monaco.editor.IMarkerData[]> {
-        return new Promise((resolve, reject) => {
-            const channel = new MessageChannel();
-
-            channel.port1.onmessage = (m) => {
-                try {
-                    const data = m.data as RenderReply;
-                    switch (data.type) {
-                        case "LoadUrl": {
-                            const reply_port = m.ports[0];
-                            load_callback(data.data)
-                                .then((content) => {
-                                    reply_port.postMessage({
-                                        type: "Content",
-                                        data: content,
-                                    });
-                                })
-                                .catch((e) => {
-                                    reply_port.postMessage({
-                                        type: "Error",
-                                        data: e,
-                                    });
-                                });
-                            break;
-                        }
-                        case "Error":
-                            channel.port1.close();
-                            reject(data.data);
-                            break;
-                        case "Result":
-                            channel.port1.close();
-                            resolve(data.data as monaco.editor.IMarkerData[]);
-                            break;
-                    }
-                } catch (e) {
-                    reject(e);
-                }
-            };
-            this.#channel.postMessage(
-                {
-                    command: "render",
-                    style: style,
-                    source: source,
-                    base_url: base_url,
-                },
-                [channel.port2],
-            );
-        });
+    current_style(): string {
+        return this.#preview_connector.current_style();
     }
 }
 
@@ -414,14 +111,26 @@ export class Lsp {
     readonly #lsp_reader: MessageReader;
     readonly #lsp_writer: MessageWriter;
 
-    readonly #previewer_backend: PreviewerBackend;
-    readonly #previewer: Previewer;
+    #preview_connector: slint_preview.PreviewConnector | null = null;
 
-    constructor(worker: Worker, lsp_previewer_port: MessagePort) {
+    constructor(worker: Worker) {
         this.#lsp_worker = worker;
         const reader = new FilterProxyReader(
             new BrowserMessageReader(this.#lsp_worker),
             (data: Message) => {
+                if (
+                    (data as NotificationMessage).method ==
+                    "slint/lsp_to_preview"
+                ) {
+                    const notification = data as NotificationMessage;
+                    const params = notification.params;
+
+                    this.#preview_connector?.process_lsp_to_preview_message(
+                        params,
+                    );
+
+                    return true;
+                }
                 if ((data as RequestMessage).method == "slint/load_file") {
                     const request = data as RequestMessage;
                     const url = (request.params as string[])[0];
@@ -454,14 +163,6 @@ export class Lsp {
 
         this.#lsp_reader = reader;
         this.#lsp_writer = writer;
-
-        const channel = new MessageChannel();
-
-        this.#previewer_backend = new PreviewerBackend(
-            channel.port1,
-            lsp_previewer_port,
-        );
-        this.#previewer = new Previewer(channel.port2);
     }
 
     get lsp_worker(): Worker {
@@ -508,8 +209,34 @@ export class Lsp {
         return lsp_client;
     }
 
-    // TODO: This should not be necessary to expose!
-    get previewer(): Previewer {
-        return this.#previewer;
+    async previewer(
+        resource_url_mapper: ResourceUrlMapperFunction,
+        style: string,
+    ): Promise<Previewer> {
+        if (this.#preview_connector === null) {
+            try {
+                slint_preview.run_event_loop();
+            } catch (e) {
+                // this is not an error!
+            }
+
+            const params = new URLSearchParams(window.location.search);
+            const experimental = params.get("SLINT_EXPERIMENTAL_FEATURES");
+
+            this.#preview_connector =
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                await slint_preview.PreviewConnector.create(
+                    (data) => {
+                        this.language_client.sendNotification(
+                            "slint/preview_to_lsp",
+                            data,
+                        );
+                    },
+                    resource_url_mapper,
+                    style,
+                    experimental === "1",
+                );
+        }
+        return new Previewer(this.#preview_connector);
     }
 }

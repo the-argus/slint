@@ -1,6 +1,8 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
+// cSpell: ignore codespaces
+
 // This file is common code shared by both vscode plugin entry points
 
 import * as vscode from "vscode";
@@ -8,7 +10,7 @@ import * as vscode from "vscode";
 import { PropertiesViewProvider } from "./properties_webview";
 import * as wasm_preview from "./wasm_preview";
 import * as lsp_commands from "../../../tools/slintpad/src/shared/lsp_commands";
-import * as welcome from "./welcome/welcome_panel";
+import * as snippets from "./snippets";
 
 import {
     BaseLanguageClient,
@@ -40,7 +42,7 @@ export class ClientHandle {
     set client(c: BaseLanguageClient | null) {
         this.#client = c;
         for (let u of this.#updaters) {
-            u(c);
+            u(this.#client);
         }
     }
 
@@ -50,15 +52,23 @@ export class ClientHandle {
     }
 
     async stop() {
-        if (this.#client) {
+        let to_stop = this.client;
+        this.client = null;
+        for (let u of this.#updaters) {
+            u(this.#client);
+        }
+
+        if (to_stop) {
             // mark as stopped so that we don't detect it as a crash
-            Object.defineProperty(this.#client, "slint_stopped", {
+            Object.defineProperty(to_stop, "slint_stopped", {
                 value: true,
             });
-            await this.#client.stop();
+            await to_stop.stop();
         }
     }
 }
+
+const client = new ClientHandle();
 
 export function setServerStatus(
     status: ServerStatusParams,
@@ -92,54 +102,80 @@ export function setServerStatus(
 // Set up our middleware. It is used to redirect/forward to the WASM preview
 // as needed and makes the triggering side so much simpler!
 
-export function languageClientOptions(
-    showPreview: (args: any) => boolean,
-    toggleDesignMode: (args: any) => boolean,
-): LanguageClientOptions {
+export function languageClientOptions(): LanguageClientOptions {
     return {
         documentSelector: [{ language: "slint" }, { language: "rust" }],
         middleware: {
-            executeCommand(command: string, args: any, next: any) {
-                if (command === "slint/showPreview") {
-                    if (showPreview(args)) {
-                        return;
-                    }
-                } else if (command === "slint/toggleDesignMode") {
-                    if (toggleDesignMode(args)) {
-                        return;
-                    }
+            async provideCodeActions(
+                document: vscode.TextDocument,
+                range: vscode.Range,
+                context: vscode.CodeActionContext,
+                token: vscode.CancellationToken,
+                next: any,
+            ) {
+                const actions = await next(document, range, context, token);
+                if (actions) {
+                    snippets.detectSnippetCodeActions(actions);
                 }
-                return next(command, args);
+                return actions;
             },
         },
     };
+}
+
+// Setup code to be run *before* the client is started.
+// Use the ClientHandle for code that runs after the client is started.
+
+export function prepare_client(client: BaseLanguageClient) {
+    client.registerFeature(new snippets.SnippetTextEditFeature());
 }
 
 // VSCode Plugin lifecycle related:
 
 export function activate(
     context: vscode.ExtensionContext,
-    client: ClientHandle,
-    startClient: (_ctx: vscode.ExtensionContext) => void,
+    startClient: (_client: ClientHandle, _ctx: vscode.ExtensionContext) => void,
 ): [vscode.StatusBarItem, PropertiesViewProvider] {
     const statusBar = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Left,
     );
-    context.subscriptions.push(statusBar);
-    statusBar.text = "Slint";
-
-    startClient(context);
 
     const properties_provider = new PropertiesViewProvider(
         context.extensionUri,
     );
+
+    context.subscriptions.push(statusBar);
+    statusBar.text = "Slint";
+
+    client.add_updater((cl) => {
+        if (cl !== null) {
+            cl.onNotification(serverStatus, (params: ServerStatusParams) =>
+                setServerStatus(params, statusBar),
+            );
+        }
+        wasm_preview.initClientForPreview(context, cl);
+
+        properties_provider.refresh_view();
+    });
+
+    vscode.workspace.onDidChangeConfiguration(async (ev) => {
+        if (ev.affectsConfiguration("slint")) {
+            client.client?.sendNotification(
+                "workspace/didChangeConfiguration",
+                { settings: "" },
+            );
+            wasm_preview.update_configuration();
+        }
+    });
+
+    startClient(client, context);
 
     client.add_updater((c) => {
         properties_provider.client = c;
     });
 
     context.subscriptions.push(
-        vscode.commands.registerCommand("slint.showPreview", function () {
+        vscode.commands.registerCommand("slint.showPreview", async function () {
             let ae = vscode.window.activeTextEditor;
             if (!ae) {
                 return;
@@ -148,22 +184,12 @@ export function activate(
             lsp_commands.showPreview(ae.document.uri.toString(), "");
         }),
     );
-    context.subscriptions.push(
-        vscode.commands.registerCommand("slint.showWelcome", function () {
-            welcome.WelcomePanel.createOrShow(context.extensionUri);
-        }),
-    );
-    context.subscriptions.push(
-        vscode.commands.registerCommand("slint.toggleDesignMode", function () {
-            lsp_commands.toggleDesignMode();
-        }),
-    );
 
     context.subscriptions.push(
         vscode.commands.registerCommand("slint.reload", async function () {
             statusBar.hide();
             await client.stop();
-            startClient(context);
+            startClient(client, context);
         }),
     );
 
@@ -180,19 +206,6 @@ export function activate(
     );
     properties_provider.refresh_view();
 
-    vscode.workspace.onDidChangeConfiguration(async (ev) => {
-        if (ev.affectsConfiguration("slint")) {
-            properties_provider.client?.sendNotification(
-                "workspace/didChangeConfiguration",
-                {
-                    settings: "",
-                },
-            );
-            wasm_preview.refreshPreview();
-            welcome.WelcomePanel.updateShowConfig();
-        }
-    });
-
     vscode.workspace.onDidChangeTextDocument(async (ev) => {
         if (
             ev.document.languageId !== "slint" &&
@@ -200,7 +213,6 @@ export function activate(
         ) {
             return;
         }
-        wasm_preview.refreshPreview(ev);
 
         // Send a request for properties information after passing through the
         // event loop once to make sure the LSP got signaled to update.
@@ -209,12 +221,19 @@ export function activate(
         }, 1);
     });
 
-    setTimeout(() => welcome.WelcomePanel.maybeShow(context.extensionUri), 1);
+    vscode.workspace.onDidChangeConfiguration(async (ev) => {
+        if (ev.affectsConfiguration("slint")) {
+            client.client?.sendNotification(
+                "workspace/didChangeConfiguration",
+                { settings: "" },
+            );
+        }
+    });
 
     return [statusBar, properties_provider];
 }
 
-export function deactivate(client: ClientHandle): Thenable<void> | undefined {
+export function deactivate(): Thenable<void> | undefined {
     if (!client.client) {
         return undefined;
     }

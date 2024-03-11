@@ -33,9 +33,9 @@ Slint C++ documentation
 
    api/library_root
 
-   genindex
+   cmake_reference.md
 
-   debugging_techniques.md
+   genindex
 
 .. image:: https://github.com/slint-ui/slint/workflows/CI/badge.svg
    :target: https://github.com/slint-ui/slint/actions

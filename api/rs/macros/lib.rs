@@ -7,7 +7,6 @@
 #![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
 
 extern crate proc_macro;
-use std::path::Path;
 
 use i_slint_compiler::diagnostics::BuildDiagnostics;
 use i_slint_compiler::parser::SyntaxKind;
@@ -17,13 +16,15 @@ use quote::quote;
 
 /// Returns true if the two token are touching. For example the two token `foo`and `-` are touching if
 /// it was written like so in the source code: `foo-` but not when written like so `foo -`
-fn are_token_touching(token1: proc_macro::Span, token2: proc_macro::Span) -> bool {
+///
+/// Returns None if we couldn't detect whether they are touching  (eg, our heuristics don't work with rust-analyzer)
+fn are_token_touching(token1: proc_macro::Span, token2: proc_macro::Span) -> Option<bool> {
     // There is no way with stable API to find out if the token are touching, so do it by
     // extracting the range from the debug representation of the span
-    are_token_touching_impl(&format!("{:?}", token1), &format!("{:?}", token2))
+    are_token_touching_impl(&format!("{token1:?}"), &format!("{token2:?}"))
 }
 
-fn are_token_touching_impl(token1_debug: &str, token2_debug: &str) -> bool {
+fn are_token_touching_impl(token1_debug: &str, token2_debug: &str) -> Option<bool> {
     // The debug representation of a span look like this: "#0 bytes(6662789..6662794)"
     // we just have to find out if the first number of the range of second span
     // is the same as the second number of the first span
@@ -32,35 +33,44 @@ fn are_token_touching_impl(token1_debug: &str, token2_debug: &str) -> bool {
     let end_of_token1 = token1_debug
         .trim_end_matches(not_is_byte_char)
         .rsplit(not_is_byte_char)
-        .next()
-        .map(|x| x.trim_matches(':'));
+        .next()?
+        .trim_matches(':');
     let begin_of_token2 = token2_debug
         .trim_end_matches(not_is_byte_char)
+        .strip_suffix(is_byte_char)?
         .trim_end_matches(is_byte_char)
         .trim_end_matches(not_is_byte_char)
         .rsplit(not_is_byte_char)
-        .next()
-        .map(|x| x.trim_matches(':'));
-    end_of_token1.zip(begin_of_token2).map(|(a, b)| !a.is_empty() && a == b).unwrap_or(false)
+        .next()?
+        .trim_matches(':');
+    (!begin_of_token2.is_empty()).then_some(end_of_token1 == begin_of_token2)
 }
 
 #[test]
 fn are_token_touching_impl_test() {
-    assert!(are_token_touching_impl("#0 bytes(6662788..6662789)", "#0 bytes(6662789..6662794)"));
-    assert!(!are_token_touching_impl("#0 bytes(6662788..6662789)", "#0 bytes(6662790..6662794)"));
-    assert!(!are_token_touching_impl("#0 bytes(6662789..6662794)", "#0 bytes(6662788..6662789)"));
-    assert!(!are_token_touching_impl("#0 bytes(6662788..6662789)", "#0 bytes(662789..662794)"));
-    assert!(are_token_touching_impl("#0 bytes(123..456)", "#0 bytes(456..789)"));
+    assert!(are_token_touching_impl("#0 bytes(6662788..6662789)", "#0 bytes(6662789..6662794)")
+        .unwrap());
+    assert!(!are_token_touching_impl("#0 bytes(6662788..6662789)", "#0 bytes(6662790..6662794)")
+        .unwrap());
+    assert!(!are_token_touching_impl("#0 bytes(6662789..6662794)", "#0 bytes(6662788..6662789)")
+        .unwrap());
+    assert!(
+        !are_token_touching_impl("#0 bytes(6662788..6662789)", "#0 bytes(662789..662794)").unwrap()
+    );
+    assert!(are_token_touching_impl("#0 bytes(123..456)", "#0 bytes(456..789)").unwrap());
 
     // Alternative representation on nightly with a special flag
-    assert!(are_token_touching_impl("/foo/bar.rs:12:7: 12:18", "/foo/bar.rs:12:18: 12:19"));
-    assert!(are_token_touching_impl("/foo/bar.rs:2:7: 13:18", "/foo/bar.rs:13:18: 14:29"));
-    assert!(!are_token_touching_impl("/foo/bar.rs:2:7: 13:18", "/foo/bar.rs:14:18: 14:29"));
-    assert!(!are_token_touching_impl("/foo/bar.rs:2:7: 2:8", "/foo/bar.rs:2:18: 2:29"));
+    assert!(are_token_touching_impl("/foo/bar.rs:12:7: 12:18", "/foo/bar.rs:12:18: 12:19").unwrap());
+    assert!(are_token_touching_impl("/foo/bar.rs:2:7: 13:18", "/foo/bar.rs:13:18: 14:29").unwrap());
+    assert!(!are_token_touching_impl("/foo/bar.rs:2:7: 13:18", "/foo/bar.rs:14:18: 14:29").unwrap());
+    assert!(!are_token_touching_impl("/foo/bar.rs:2:7: 2:8", "/foo/bar.rs:2:18: 2:29").unwrap());
 
     // What happens if the representation change
-    assert!(!are_token_touching_impl("hello", "hello"));
-    assert!(!are_token_touching_impl("hello42", "hello42"));
+    assert!(are_token_touching_impl("hello", "hello").is_none());
+    assert!(are_token_touching_impl("hello42", "hello42").is_none());
+
+    // rust-analyzer just has indices that means nothing
+    assert!(are_token_touching_impl("55", "56").is_none());
 }
 
 fn fill_token_vec(stream: impl Iterator<Item = TokenTree>, vec: &mut Vec<parser::Token>) {
@@ -73,7 +83,8 @@ fn fill_token_vec(stream: impl Iterator<Item = TokenTree>, vec: &mut Vec<parser:
                 if let Some(last) = vec.last_mut() {
                     if (last.kind == SyntaxKind::ColorLiteral && last.text.len() == 1)
                         || (last.kind == SyntaxKind::Identifier
-                            && are_token_touching(prev_span, span))
+                            && are_token_touching(prev_span, span)
+                                .unwrap_or_else(|| last.text.ends_with("-")))
                     {
                         last.text = format!("{}{}", last.text, i).into();
                         prev_span = span;
@@ -121,7 +132,7 @@ fn fill_token_vec(stream: impl Iterator<Item = TokenTree>, vec: &mut Vec<parser:
                     '-' => {
                         if let Some(last) = vec.last_mut() {
                             if last.kind == SyntaxKind::Identifier
-                                && are_token_touching(prev_span, p.span())
+                                && are_token_touching(prev_span, p.span()).unwrap_or(true)
                             {
                                 last.text = format!("{}-", last.text).into();
                                 prev_span = span;
@@ -212,7 +223,8 @@ fn fill_token_vec(stream: impl Iterator<Item = TokenTree>, vec: &mut Vec<parser:
                     if let Some(last) = vec.last_mut() {
                         if (last.kind == SyntaxKind::ColorLiteral && last.text.len() == 1)
                             || (last.kind == SyntaxKind::Identifier
-                                && are_token_touching(prev_span, span))
+                                && are_token_touching(prev_span, span)
+                                    .unwrap_or_else(|| last.text.ends_with("-")))
                         {
                             last.text = format!("{}{}", last.text, s).into();
                             prev_span = span;
@@ -258,11 +270,22 @@ fn fill_token_vec(stream: impl Iterator<Item = TokenTree>, vec: &mut Vec<parser:
     }
 }
 
-fn extract_include_paths(
-    mut stream: proc_macro::token_stream::IntoIter,
-) -> (impl Iterator<Item = TokenTree>, Vec<std::path::PathBuf>) {
-    let mut include_paths = Vec::new();
+fn extract_path(literal: proc_macro::Literal) -> std::path::PathBuf {
+    let path_with_quotes = literal.to_string();
+    let path_with_quotes_stripped = if let Some(p) = path_with_quotes.strip_prefix('r') {
+        let hash_removed = p.trim_matches('#');
+        hash_removed.strip_prefix('\"').unwrap().strip_suffix('\"').unwrap()
+    } else {
+        // FIXME: unescape
+        path_with_quotes.trim_matches('\"')
+    };
+    path_with_quotes_stripped.into()
+}
 
+fn extract_compiler_config(
+    mut stream: proc_macro::token_stream::IntoIter,
+    compiler_config: &mut CompilerConfiguration,
+) -> impl Iterator<Item = TokenTree> {
     let mut remaining_stream;
     loop {
         remaining_stream = stream.clone();
@@ -271,24 +294,56 @@ fn extract_include_paths(
                 if p.as_char() == '#' && group.delimiter() == proc_macro::Delimiter::Bracket =>
             {
                 let mut attr_stream = group.stream().into_iter();
-                match (attr_stream.next(), attr_stream.next(), attr_stream.next()) {
-                    (
-                        Some(TokenTree::Ident(include_ident)),
-                        Some(TokenTree::Punct(equal_punct)),
-                        Some(TokenTree::Literal(path)),
-                    ) if include_ident.to_string() == "include_path"
-                        && equal_punct.as_char() == '=' =>
+                match attr_stream.next() {
+                    Some(TokenTree::Ident(include_ident))
+                        if include_ident.to_string() == "include_path" =>
                     {
-                        let path_with_quotes = path.to_string();
-                        let path_with_quotes_stripped =
-                            if let Some(p) = path_with_quotes.strip_prefix('r') {
-                                let hash_removed = p.trim_matches('#');
-                                hash_removed.strip_prefix('\"').unwrap().strip_suffix('\"').unwrap()
-                            } else {
-                                // FIXME: unescape
-                                path_with_quotes.trim_matches('\"')
-                            };
-                        include_paths.push(path_with_quotes_stripped.into());
+                        match (attr_stream.next(), attr_stream.next()) {
+                            (
+                                Some(TokenTree::Punct(equal_punct)),
+                                Some(TokenTree::Literal(path)),
+                            ) if equal_punct.as_char() == '=' => {
+                                compiler_config.include_paths.push(extract_path(path));
+                            }
+                            _ => break,
+                        }
+                    }
+                    Some(TokenTree::Ident(library_ident))
+                        if library_ident.to_string() == "library_path" =>
+                    {
+                        match (attr_stream.next(), attr_stream.next(), attr_stream.next()) {
+                            (
+                                Some(TokenTree::Group(group)),
+                                Some(TokenTree::Punct(equal_punct)),
+                                Some(TokenTree::Literal(path)),
+                            ) if group.delimiter() == proc_macro::Delimiter::Parenthesis
+                                && equal_punct.as_char() == '=' =>
+                            {
+                                let library_name = group.stream().into_iter().next().unwrap();
+                                compiler_config
+                                    .library_paths
+                                    .insert(library_name.to_string(), extract_path(path));
+                            }
+                            _ => break,
+                        }
+                    }
+                    Some(TokenTree::Ident(style_ident)) if style_ident.to_string() == "style" => {
+                        match (attr_stream.next(), attr_stream.next()) {
+                            (
+                                Some(TokenTree::Punct(equal_punct)),
+                                Some(TokenTree::Literal(requested_style)),
+                            ) if equal_punct.as_char() == '=' => {
+                                compiler_config.style = requested_style
+                                    .to_string()
+                                    .strip_prefix('\"')
+                                    .unwrap()
+                                    .strip_suffix('\"')
+                                    .unwrap()
+                                    .to_string()
+                                    .into();
+                            }
+                            _ => break,
+                        }
                     }
                     _ => break,
                 }
@@ -296,7 +351,7 @@ fn extract_include_paths(
             _ => break,
         }
     }
-    (remaining_stream, include_paths)
+    remaining_stream
 }
 
 /// This macro allows you to use the Slint design markup language inline in Rust code. Within the braces of the macro
@@ -316,7 +371,10 @@ fn extract_include_paths(
 pub fn slint(stream: TokenStream) -> TokenStream {
     let token_iter = stream.into_iter();
 
-    let (token_iter, include_paths) = extract_include_paths(token_iter);
+    let mut compiler_config =
+        CompilerConfiguration::new(i_slint_compiler::generator::OutputFormat::Rust);
+
+    let token_iter = extract_compiler_config(token_iter, &mut compiler_config);
 
     let mut tokens = vec![];
     fill_token_vec(token_iter, &mut tokens);
@@ -335,46 +393,8 @@ pub fn slint(stream: TokenStream) -> TokenStream {
     }
 
     //println!("{:#?}", syntax_node);
-    let mut compiler_config =
-        CompilerConfiguration::new(i_slint_compiler::generator::OutputFormat::Rust);
     compiler_config.translation_domain = std::env::var("CARGO_PKG_NAME").ok();
-
-    if std::env::var_os("SLINT_STYLE").is_none() {
-        // This file is written by the i-slint-backend-selector's built script.
-        // It is in the target/xxx/build directory
-        let target_path = match std::env::var_os("OUT_DIR") {
-            Some(out_dir) => Some(
-                Path::new(&out_dir)
-                    .parent()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .join("SLINT_DEFAULT_STYLE.txt"),
-            ),
-            None => {
-                // OUT_DIR is only defined when the crate having the macro has a build.rs script
-                // as a fallback, try to parse the rustc arguments
-                // https://stackoverflow.com/questions/60264534/getting-the-target-folder-from-inside-a-rust-proc-macro
-                let mut args = std::env::args();
-                let mut out_dir = None;
-                while let Some(arg) = args.next() {
-                    if arg == "--out-dir" {
-                        out_dir = args.next();
-                    }
-                }
-                out_dir.map(|out_dir| {
-                    Path::new(&out_dir).parent().unwrap().join("build/SLINT_DEFAULT_STYLE.txt")
-                })
-            }
-        };
-        if let Some(target_path) = target_path {
-            compiler_config.style =
-                std::fs::read_to_string(target_path).map(|style| style.trim().into()).ok()
-        }
-    }
-
-    compiler_config.include_paths = include_paths;
-    let (root_component, diag) =
+    let (root_component, diag, _) =
         spin_on::spin_on(compile_syntax_node(syntax_node, diag, compiler_config));
     //println!("{:#?}", tree);
     if diag.has_error() {
@@ -392,7 +412,7 @@ pub fn slint(stream: TokenStream) -> TokenStream {
         .map(|p| quote! {const _ : &'static [u8] = ::core::include_bytes!(#p);});
 
     result.extend(reload);
-    result.extend(quote! {const _ : Option<&'static str> = ::core::option_env!("SLINT_STYLE");});
+    result.extend(quote! {const _ : ::core::option::Option<&'static str> = ::core::option_env!("SLINT_STYLE");});
 
     let mut result = TokenStream::from(result);
     if !diag.is_empty() {

@@ -11,8 +11,6 @@ use super::*;
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeTabWidget {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
     pub width: Property<LogicalLength>,
     pub height: Property<LogicalLength>,
     pub cached_rendering_data: CachedRenderingData,
@@ -176,13 +174,6 @@ impl Item for NativeTabWidget {
         bind!(tabbar_height = vertical_metrics.tabbar_size);
     }
 
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
-    }
-
     fn layout_info(
         self: Pin<&Self>,
         orientation: Orientation,
@@ -290,7 +281,7 @@ impl Item for NativeTabWidget {
             initial_state as "int"
         ] {
             QStyleOptionTabWidgetFrame option;
-            option.initFrom(widget);
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             auto style = qApp->style();
             option.lineWidth = style->pixelMetric(QStyle::PM_DefaultFrameWidth, 0, widget);
@@ -339,10 +330,6 @@ fn slint_get_NativeTabWidgetVTable() -> NativeTabWidgetVTable for NativeTabWidge
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeTab {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     pub title: Property<SharedString>,
     pub icon: Property<i_slint_core::graphics::Image>,
     pub enabled: Property<bool>,
@@ -362,13 +349,6 @@ impl Item for NativeTab {
         self.widget_ptr.set(cpp! { unsafe [animation_tracker_property_ptr as "void*"] -> SlintTypeErasedWidgetPtr as "std::unique_ptr<SlintTypeErasedWidget>" {
             return make_unique_animated_widget<QWidget>(animation_tracker_property_ptr);
         }});
-    }
-
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
     }
 
     fn layout_info(
@@ -517,7 +497,7 @@ impl Item for NativeTab {
         ] {
             ensure_initialized();
             QStyleOptionTab option;
-            option.initFrom(widget);
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             option.rect = QRect(QPoint(), size / dpr);;
             option.text = text;

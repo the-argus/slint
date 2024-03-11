@@ -33,7 +33,7 @@ fn create_box_shadow_element(
 
     let mut element = Element {
         id: format!("{}-shadow", sibling_element.borrow().id),
-        base_type: type_register.lookup_element("BoxShadow").unwrap(),
+        base_type: type_register.lookup_builtin_element("BoxShadow").unwrap(),
         enclosing_component: sibling_element.borrow().enclosing_component.clone(),
         bindings: shadow_property_bindings
             .into_iter()
@@ -84,7 +84,7 @@ fn inject_shadow_element_in_repeated_element(
 
     crate::object_tree::inject_element_as_repeated_element(
         repeated_element,
-        ElementRc::new(RefCell::new(shadow_element)),
+        Element::make_rc(shadow_element),
     );
 }
 
@@ -163,18 +163,8 @@ pub fn lower_shadow_properties(
                     }
                 };
 
-                // Install bindings from the remaining properties of the shadow element to the
-                // original, such as x/y/width/height.
-                for (prop, _) in crate::typeregister::RESERVED_GEOMETRY_PROPERTIES.iter() {
-                    let prop = prop.to_string();
-                    shadow_elem.bindings.entry(prop.clone()).or_insert_with(|| {
-                        let binding_ref =
-                            Expression::PropertyReference(NamedReference::new(&child, &prop));
-                        RefCell::new(binding_ref.into())
-                    });
-                }
-
-                elem.borrow_mut().children.push(ElementRc::new(RefCell::new(shadow_elem)));
+                shadow_elem.geometry_props = child.borrow().geometry_props.clone();
+                elem.borrow_mut().children.push(ElementRc::new(shadow_elem.into()));
             }
             elem.borrow_mut().children.push(child);
         }

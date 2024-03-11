@@ -1,12 +1,13 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use core::pin::Pin;
 
 use crate::api::PlatformError;
-use crate::component::ComponentRef;
+use crate::item_tree::ItemTreeRef;
 use crate::lengths::{LogicalLength, LogicalPoint, LogicalRect, LogicalSize, ScaleFactor};
 use crate::window::WindowAdapter;
 
@@ -59,7 +60,7 @@ pub trait RendererSealed {
     /// Clear the caches for the items that are being removed
     fn free_graphics_resources(
         &self,
-        _component: ComponentRef,
+        _component: ItemTreeRef,
         _items: &mut dyn Iterator<Item = Pin<crate::items::ItemRef<'_>>>,
     ) -> Result<(), crate::platform::PlatformError> {
         Ok(())
@@ -67,7 +68,7 @@ pub trait RendererSealed {
 
     /// Mark a given region as dirty regardless whether the items actually are dirty.
     ///
-    /// Example: when a PopupWindow disapear, the region under the popup needs to be redrawn
+    /// Example: when a PopupWindow disappears, the region under the popup needs to be redrawn
     fn mark_dirty_region(&self, _region: crate::item_rendering::DirtyRegion) {}
 
     #[cfg(feature = "std")] // FIXME: just because of the Error

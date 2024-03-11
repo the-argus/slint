@@ -402,7 +402,7 @@ impl LookupObject for ElementRc {
             }
         }
         if !matches!(self.borrow().base_type, ElementType::Global) {
-            for (name, ty) in crate::typeregister::reserved_properties() {
+            for (name, ty, _) in crate::typeregister::reserved_properties() {
                 let e = expression_from_reference(
                     NamedReference::new(self, name),
                     &ty,
@@ -451,7 +451,6 @@ fn expression_from_reference(
 }
 
 /// Lookup for Globals and Enum.
-/// Note: for enums, the expression's value is `usize::MAX`
 struct LookupType;
 impl LookupObject for LookupType {
     fn for_each_entry<R>(
@@ -465,7 +464,7 @@ impl LookupObject for LookupType {
             }
         }
         for (name, ty) in ctx.type_register.all_elements() {
-            if let Some(r) = Self::from_element(ty).and_then(|e| f(&name, e)) {
+            if let Some(r) = Self::from_element(ty, ctx, &name).and_then(|e| f(&name, e)) {
                 return Some(r);
             }
         }
@@ -474,7 +473,7 @@ impl LookupObject for LookupType {
 
     fn lookup(&self, ctx: &LookupCtx, name: &str) -> Option<LookupResult> {
         Self::from_type(ctx.type_register.lookup(name))
-            .or_else(|| Self::from_element(ctx.type_register.lookup_element(name).ok()?))
+            .or_else(|| Self::from_element(ctx.type_register.lookup_element(name).ok()?, ctx, name))
     }
 }
 impl LookupType {
@@ -485,10 +484,20 @@ impl LookupType {
         }
     }
 
-    fn from_element(el: ElementType) -> Option<LookupResult> {
+    fn from_element(el: ElementType, ctx: &LookupCtx, name: &str) -> Option<LookupResult> {
         match el {
             ElementType::Component(c) if c.is_global() => {
-                Some(Expression::ElementReference(Rc::downgrade(&c.root_element)).into())
+                // Check if it is internal, but allow re-export (different name) eg: NativeStyleMetrics re-exported as StyleMetrics
+                if c.root_element
+                    .borrow()
+                    .builtin_type()
+                    .map_or(false, |x| x.is_internal && x.name == name)
+                    && !ctx.type_register.expose_internal_types
+                {
+                    None
+                } else {
+                    Some(Expression::ElementReference(Rc::downgrade(&c.root_element)).into())
+                }
             }
             _ => None,
         }
@@ -556,7 +565,7 @@ impl ColorSpecific {
 struct KeysLookup;
 
 macro_rules! special_keys_lookup {
-    ($($char:literal # $name:ident # $($qt:ident)|* # $($winit:ident)|* # $($_xkb:ident)|*;)*) => {
+    ($($char:literal # $name:ident # $($qt:ident)|* # $($winit:ident $(($_pos:ident))?)|* # $($_xkb:ident)|*;)*) => {
         impl LookupObject for KeysLookup {
             fn for_each_entry<R>(
                 &self,
@@ -584,6 +593,18 @@ impl LookupObject for EasingSpecific {
         use EasingCurve::CubicBezier;
         None.or_else(|| f("linear", Expression::EasingCurve(EasingCurve::Linear).into()))
             .or_else(|| {
+                f("ease-in-quad", Expression::EasingCurve(CubicBezier(0.11, 0.0, 0.5, 0.0)).into())
+            })
+            .or_else(|| {
+                f("ease-out-quad", Expression::EasingCurve(CubicBezier(0.5, 1.0, 0.89, 1.0)).into())
+            })
+            .or_else(|| {
+                f(
+                    "ease-in-out-quad",
+                    Expression::EasingCurve(CubicBezier(0.45, 0.0, 0.55, 1.0)).into(),
+                )
+            })
+            .or_else(|| {
                 f("ease", Expression::EasingCurve(CubicBezier(0.25, 0.1, 0.25, 1.0)).into())
             })
             .or_else(|| {
@@ -596,6 +617,99 @@ impl LookupObject for EasingSpecific {
                 f("ease-out", Expression::EasingCurve(CubicBezier(0.0, 0.0, 0.58, 1.0)).into())
             })
             .or_else(|| {
+                f("ease-in-quart", Expression::EasingCurve(CubicBezier(0.5, 0.0, 0.75, 0.0)).into())
+            })
+            .or_else(|| {
+                f(
+                    "ease-out-quart",
+                    Expression::EasingCurve(CubicBezier(0.25, 1.0, 0.5, 1.0)).into(),
+                )
+            })
+            .or_else(|| {
+                f(
+                    "ease-in-out-quart",
+                    Expression::EasingCurve(CubicBezier(0.76, 0.0, 0.24, 1.0)).into(),
+                )
+            })
+            .or_else(|| {
+                f(
+                    "ease-in-quint",
+                    Expression::EasingCurve(CubicBezier(0.64, 0.0, 0.78, 0.0)).into(),
+                )
+            })
+            .or_else(|| {
+                f(
+                    "ease-out-quint",
+                    Expression::EasingCurve(CubicBezier(0.22, 1.0, 0.36, 1.0)).into(),
+                )
+            })
+            .or_else(|| {
+                f(
+                    "ease-in-out-quint",
+                    Expression::EasingCurve(CubicBezier(0.83, 0.0, 0.17, 1.0)).into(),
+                )
+            })
+            .or_else(|| {
+                f("ease-in-expo", Expression::EasingCurve(CubicBezier(0.7, 0.0, 0.84, 0.0)).into())
+            })
+            .or_else(|| {
+                f("ease-out-expo", Expression::EasingCurve(CubicBezier(0.16, 1.0, 0.3, 1.0)).into())
+            })
+            .or_else(|| {
+                f(
+                    "ease-in-out-expo",
+                    Expression::EasingCurve(CubicBezier(0.87, 0.0, 0.13, 1.0)).into(),
+                )
+            })
+            .or_else(|| {
+                f(
+                    "ease-in-back",
+                    Expression::EasingCurve(CubicBezier(0.36, 0.0, 0.66, -0.56)).into(),
+                )
+            })
+            .or_else(|| {
+                f(
+                    "ease-out-back",
+                    Expression::EasingCurve(CubicBezier(0.34, 1.56, 0.64, 1.0)).into(),
+                )
+            })
+            .or_else(|| {
+                f(
+                    "ease-in-out-back",
+                    Expression::EasingCurve(CubicBezier(0.68, -0.6, 0.32, 1.6)).into(),
+                )
+            })
+            .or_else(|| {
+                f("ease-in-sine", Expression::EasingCurve(CubicBezier(0.12, 0.0, 0.39, 0.0)).into())
+            })
+            .or_else(|| {
+                f(
+                    "ease-out-sine",
+                    Expression::EasingCurve(CubicBezier(0.61, 1.0, 0.88, 1.0)).into(),
+                )
+            })
+            .or_else(|| {
+                f(
+                    "ease-in-out-sine",
+                    Expression::EasingCurve(CubicBezier(0.37, 0.0, 0.63, 1.0)).into(),
+                )
+            })
+            .or_else(|| {
+                f("ease-in-circ", Expression::EasingCurve(CubicBezier(0.55, 0.0, 1.0, 0.45)).into())
+            })
+            .or_else(|| {
+                f(
+                    "ease-out-circ",
+                    Expression::EasingCurve(CubicBezier(0.0, 0.55, 0.45, 1.0)).into(),
+                )
+            })
+            .or_else(|| {
+                f(
+                    "ease-in-out-circ",
+                    Expression::EasingCurve(CubicBezier(0.85, 0.0, 0.15, 1.0)).into(),
+                )
+            })
+            .or_else(|| {
                 f(
                     "cubic-bezier",
                     Expression::BuiltinMacroReference(
@@ -603,6 +717,30 @@ impl LookupObject for EasingSpecific {
                         ctx.current_token.clone(),
                     )
                     .into(),
+                )
+            })
+            .or_else(|| {
+                f("ease-in-elastic", Expression::EasingCurve(EasingCurve::EaseInElastic).into())
+            })
+            .or_else(|| {
+                f("ease-out-elastic", Expression::EasingCurve(EasingCurve::EaseOutElastic).into())
+            })
+            .or_else(|| {
+                f(
+                    "ease-in-out-elastic",
+                    Expression::EasingCurve(EasingCurve::EaseInOutElastic).into(),
+                )
+            })
+            .or_else(|| {
+                f("ease-in-bounce", Expression::EasingCurve(EasingCurve::EaseInBounce).into())
+            })
+            .or_else(|| {
+                f("ease-out-bounce", Expression::EasingCurve(EasingCurve::EaseOutBounce).into())
+            })
+            .or_else(|| {
+                f(
+                    "ease-in-out-bounce",
+                    Expression::EasingCurve(EasingCurve::EaseInOutBounce).into(),
                 )
             })
     }
@@ -642,6 +780,7 @@ impl LookupObject for MathFunctions {
             .or_else(|| f("round", BuiltinFunctionReference(BuiltinFunction::Round, sl())))
             .or_else(|| f("ceil", BuiltinFunctionReference(BuiltinFunction::Ceil, sl())))
             .or_else(|| f("floor", BuiltinFunctionReference(BuiltinFunction::Floor, sl())))
+            .or_else(|| f("clamp", BuiltinMacroReference(BuiltinMacroFunction::Clamp, t.clone())))
             .or_else(|| f("abs", BuiltinFunctionReference(BuiltinFunction::Abs, sl())))
             .or_else(|| f("sqrt", BuiltinFunctionReference(BuiltinFunction::Sqrt, sl())))
             .or_else(|| f("max", BuiltinMacroReference(BuiltinMacroFunction::Max, t.clone())))
@@ -731,14 +870,18 @@ struct BuiltinNamespaceLookup;
 impl LookupObject for BuiltinNamespaceLookup {
     fn for_each_entry<R>(
         &self,
-        _ctx: &LookupCtx,
+        ctx: &LookupCtx,
         f: &mut impl FnMut(&str, LookupResult) -> Option<R>,
     ) -> Option<R> {
         None.or_else(|| f("Colors", LookupResult::Namespace(BuiltinNamespace::Colors)))
             .or_else(|| f("Math", LookupResult::Namespace(BuiltinNamespace::Math)))
             .or_else(|| f("Key", LookupResult::Namespace(BuiltinNamespace::Key)))
             .or_else(|| {
-                f("SlintInternal", LookupResult::Namespace(BuiltinNamespace::SlintInternal))
+                if ctx.type_register.expose_internal_types {
+                    f("SlintInternal", LookupResult::Namespace(BuiltinNamespace::SlintInternal))
+                } else {
+                    None
+                }
             })
     }
 }

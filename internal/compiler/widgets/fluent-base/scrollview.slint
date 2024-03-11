@@ -1,7 +1,7 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-import { Palette, Icons } from "styling.slint";
+import { FluentPalette, Icons } from "styling.slint";
 
 component ScrollViewButton inherits TouchArea {
     in property <image> icon;
@@ -14,7 +14,7 @@ component ScrollViewButton inherits TouchArea {
         y: (parent.height - self.height) / 2;
         width: parent.width;
         source: root.icon;
-        colorize: Palette.control-stroke;
+        colorize: FluentPalette.border;
 
         animate colorize, opacity { duration: 150ms; }
         animate width, height { duration: 150ms; easing: ease-out; }
@@ -27,33 +27,44 @@ component ScrollViewButton inherits TouchArea {
         }
         hover when root.has-hover : {
             opacity: 1;
-            i-icon.colorize: Palette.text-secondary;
+            i-icon.colorize: FluentPalette.text-secondary;
         }
     ]
 }
 
 component ScrollBar inherits Rectangle {
+    in-out property <bool> horizontal;
+    in-out property <length> maximum;
+    in-out property <length> page-size;
+    in-out property <length> value;
+    in property <bool> enabled;
+
     private property <length> offset: 16px;
     private property <length> size: 2px;
     private property <length> track-size: root.horizontal ? root.width - 2 * root.offset : root.height - 2 * offset;
     private property <length> step-size: 10px;
 
-    in-out property <bool> horizontal;
-    in-out property<length> maximum;
-    in-out property<length> page-size;
-    in-out property<length> value;
-    in property <bool> enabled;
-
     border-width: 1px;
     border-radius: 7px;
 
+    states [
+        hover when i-touch-area.has-hover || i-down-scroll-button.has-hover || i-up-scroll-button.has-hover : {
+            root.background: FluentPalette.alternate-background;
+            root.size: 6px;
+            i-up-scroll-button.opacity: 1;
+            i-down-scroll-button.opacity: 1;
+        }
+    ]
+
+    animate size { duration: 150ms; easing: ease-out; }
+
     i-thumb := Rectangle {
-        width: !root.horizontal ? root.size : root.maximum <= 0phx ? 0phx : max(32px, root.track-size * root.page-size / (root.maximum + root.page-size));
-        height: root.horizontal ? root.size : root.maximum <= 0phx ? 0phx : max(32px, root.track-size * (root.page-size / (root.maximum + root.page-size)));
+        width: !root.horizontal ? root.size : root.maximum <= 0phx ? 0phx : max(16px, root.track-size * root.page-size / (root.maximum + root.page-size));
+        height: root.horizontal ? root.size : root.maximum <= 0phx ? 0phx : max(16px, root.track-size * (root.page-size / (root.maximum + root.page-size)));
         x: !root.horizontal ? parent.width - 4px - self.width : root.offset + (root.track-size - i-thumb.width) * (-root.value / root.maximum);
         y: root.horizontal ? parent.height - 4px - self.height : root.offset + (root.track-size - i-thumb.height) * (-root.value / root.maximum);
         border-radius: (root.horizontal ? self.height : self.width) / 2;
-        background: Palette.control-stroke;
+        background: FluentPalette.border;
 
         animate width, height { duration: 150ms; easing: ease-out; }
     }
@@ -78,6 +89,17 @@ component ScrollBar inherits Rectangle {
                 )));
             }
         }
+
+        scroll-event(event) => {
+            if (root.horizontal && event.delta-x != 0) {
+                root.value = max(-root.maximum, min(0px, root.value + event.delta-x));
+                return accept;
+            } else if (!root.horizontal && event.delta-y != 0) {
+                root.value = max(-root.maximum, min(0px, root.value + event.delta-y));
+                return accept;
+            }
+            reject
+        }
     }
 
     i-up-scroll-button := ScrollViewButton {
@@ -101,17 +123,6 @@ component ScrollBar inherits Rectangle {
             root.value = max(-root.maximum, root.value - root.step-size);
         }
     }
-
-    states [
-        hover when i-touch-area.has-hover || i-down-scroll-button.has-hover || i-up-scroll-button.has-hover : {
-            root.background: Palette.acrylic-background;
-            root.size: 6px;
-            i-up-scroll-button.opacity: 1;
-            i-down-scroll-button.opacity: 1;
-        }
-    ]
-
-    animate size { duration: 150ms; easing: ease-out; }
 }
 
 export component ScrollView {
@@ -133,13 +144,11 @@ export component ScrollView {
     preferred-width: 100%;
 
     i-flickable := Flickable {
-        x: 2px;
-        y: 2px;
         interactive: false;
         viewport-y <=> i-vertical-bar.value;
         viewport-x <=> i-horizontal-bar.value;
-        width: parent.width - i-vertical-bar.width;
-        height: parent.height - i-horizontal-bar.height;
+        width: parent.width;
+        height: parent.height;
 
         @children
     }
@@ -147,7 +156,7 @@ export component ScrollView {
     i-vertical-bar := ScrollBar {
         enabled: root.enabled;
         width: 14px;
-        x: i-flickable.width + i-flickable.x;
+        x: i-flickable.width + i-flickable.x - self.width;
         y: i-flickable.y;
         height:  i-flickable.height;
         horizontal: false;
@@ -160,7 +169,7 @@ export component ScrollView {
         enabled: root.enabled;
         width:  i-flickable.width;
         height: 14px;
-        y: i-flickable.height + i-flickable.y;
+        y: i-flickable.height + i-flickable.y - self.height;
         x: i-flickable.x;
         horizontal: true;
         maximum:  i-flickable.viewport-width - i-flickable.width;

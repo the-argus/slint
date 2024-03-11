@@ -9,10 +9,6 @@ use super::*;
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeScrollView {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     pub horizontal_max: Property<LogicalLength>,
     pub horizontal_page_size: Property<LogicalLength>,
     pub horizontal_value: Property<LogicalLength>,
@@ -46,7 +42,7 @@ impl Item for NativeScrollView {
         cpp!(unsafe [] -> qttypes::QMargins as "QMargins" {
             ensure_initialized();
             QStyleOptionSlider option;
-            initQSliderOptions(option, false, true, 0, 0, 1000, 1000);
+            initQSliderOptions(option, false, true, 0, 0, 1000, 1000, false);
 
             int extent = qApp->style()->pixelMetric(QStyle::PM_ScrollBarExtent, &option, nullptr);
             int sliderMin = qApp->style()->pixelMetric(QStyle::PM_ScrollBarSliderMin, &option, nullptr);
@@ -90,27 +86,17 @@ impl Item for NativeScrollView {
         });
     }
 
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
-    }
-
     fn layout_info(
         self: Pin<&Self>,
         orientation: Orientation,
         _window_adapter: &Rc<dyn WindowAdapter>,
     ) -> LayoutInfo {
-        LayoutInfo {
-            min: match orientation {
-                Orientation::Horizontal => self.native_padding_left() + self.native_padding_right(),
-                Orientation::Vertical => self.native_padding_top() + self.native_padding_bottom(),
-            }
-            .get(),
-            stretch: 1.,
-            ..LayoutInfo::default()
+        let min = match orientation {
+            Orientation::Horizontal => self.native_padding_left() + self.native_padding_right(),
+            Orientation::Vertical => self.native_padding_top() + self.native_padding_bottom(),
         }
+        .get();
+        LayoutInfo { min, preferred: min, stretch: 1., ..LayoutInfo::default() }
     }
 
     fn input_event_filter_before_children(
@@ -126,9 +112,9 @@ impl Item for NativeScrollView {
         self: Pin<&Self>,
         event: MouseEvent,
         _window_adapter: &Rc<dyn WindowAdapter>,
-        _self_rc: &i_slint_core::items::ItemRc,
+        self_rc: &i_slint_core::items::ItemRc,
     ) -> InputEventResult {
-        let size: qttypes::QSize = get_size!(self);
+        let size: qttypes::QSize = get_size!(self_rc);
         let mut data = self.data();
         let active_controls = data.active_controls;
         let pressed = data.pressed;
@@ -157,7 +143,7 @@ impl Item for NativeScrollView {
             ] -> u32 as "int" {
                 ensure_initialized();
                 QStyleOptionSlider option;
-                initQSliderOptions(option, pressed, true, active_controls, 0, max, -value);
+                initQSliderOptions(option, pressed, true, active_controls, 0, max, -value, false);
                 option.pageStep = page_size;
                 if (!horizontal) {
                     option.state ^= QStyle::State_Horizontal;
@@ -223,8 +209,16 @@ impl Item for NativeScrollView {
                         InputEventResult::EventAccepted
                     }
                 }
-                MouseEvent::Wheel { .. } => {
-                    // TODO
+                MouseEvent::Wheel { delta_x, delta_y, .. } => {
+                    if horizontal {
+                        let max = max as f32;
+                        let new_val = value as f32 + delta_x;
+                        value_prop.set(LogicalLength::new(new_val.min(0.).max(-max)));
+                    } else {
+                        let max = max as f32;
+                        let new_val = value as f32 + delta_y;
+                        value_prop.set(LogicalLength::new(new_val.min(0.).max(-max)));
+                    }
                     InputEventResult::EventAccepted
                 }
             };
@@ -310,7 +304,7 @@ impl Item for NativeScrollView {
         ] -> bool as "bool" {
             ensure_initialized();
             QStyleOptionFrame frameOption;
-            frameOption.initFrom(widget);
+            frameOption.styleObject = widget;
             frameOption.state |= QStyle::State(initial_state);
             frameOption.frameShape = QFrame::StyledPanel;
 
@@ -383,7 +377,7 @@ impl Item for NativeScrollView {
                 QStyleOptionSlider option;
                 option.state |= QStyle::State(initial_state);
                 option.rect = QRect(QPoint(), r.size());
-                initQSliderOptions(option, pressed, true, active_controls, 0, max / dpr, -value / dpr);
+                initQSliderOptions(option, pressed, true, active_controls, 0, max / dpr, -value / dpr, false);
                 option.subControls = QStyle::SC_All;
                 option.pageStep = page_size / dpr;
                 if (has_focus)

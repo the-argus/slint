@@ -5,22 +5,39 @@
 import { Button } from "button.slint";
 import { CheckBox } from "checkbox.slint";
 import { ScrollView } from "scrollview.slint";
-import { Palette } from "styling.slint";
+import { MaterialPalette } from "styling.slint";
 import { Switch } from "switch.slint";
 
 export { Button, CheckBox, ScrollView, Switch }
+
+import { ListItem } from "components.slint";
+export { ListItem }
 
 export global StyleMetrics  {
     out property <length> layout-spacing: 16px;
     out property <length> layout-padding: 16px;
     out property <length> text-cursor-width: 2px;
 
-    out property <color> default-text-color: Palette.on-surface;
+    out property <color> default-text-color: MaterialPalette.foreground;
     out property <color> textedit-background: transparent;
-    out property <color> textedit-text-color: Palette.on-surface;
+    out property <color> textedit-text-color: MaterialPalette.foreground;
     out property <color> textedit-background-disabled: transparent;
-    out property <color> textedit-text-color-disabled: Palette.on-surface;
-    out property <bool> dark-color-scheme: Palette.dark-color-scheme;
+    out property <color> textedit-text-color-disabled: MaterialPalette.foreground;
+    out property <bool> dark-color-scheme: MaterialPalette.dark-color-scheme;
     out property <string> default-font-family: "Roboto";
-    out property <color> window-background: Palette.background;
+    out property <color> window-background: MaterialPalette.background;
+}
+
+export global Palette {
+    out property <brush> background: MaterialPalette.background;
+    out property <brush> foreground: MaterialPalette.foreground;
+    out property <brush> alternate-background: MaterialPalette.alternate-background;
+    out property <brush> alternate-foreground: MaterialPalette.alternate-foreground;
+    out property <brush> control-background: MaterialPalette.control-background;
+    out property <brush> control-foreground: MaterialPalette.control-foreground;
+    out property <brush> accent-background: MaterialPalette.accent-background;
+    out property <brush> accent-foreground: MaterialPalette.accent-foreground;
+    out property <brush> selection-background: MaterialPalette.selection-background;
+    out property <brush> selection-foreground: MaterialPalette.selection-foreground;
+    out property <brush> border: MaterialPalette.border;
 }

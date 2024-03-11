@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial -->
 # Slint
 
 [![Crates.io](https://img.shields.io/crates/v/slint)](https://crates.io/crates/slint)
@@ -22,7 +23,7 @@ In your `Cargo.toml` add:
 
 ```toml
 [dependencies]
-slint = "1.1.0"
+slint = "1.4.0"
 ```
 
 And in your `main.rs`:
@@ -60,7 +61,3 @@ You can quickly try out the [examples](/examples) by cloning this repo and runni
 # Runs the "printerdemo" example
 cargo run --release --bin printerdemo
 ```
-
-### Minimum Supported Rust Version
-
- This crate's minimum supported `rustc` version is 1.66.

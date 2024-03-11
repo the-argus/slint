@@ -36,8 +36,9 @@ Sub3 := Rectangle {
 }
 
 Container := Rectangle {
+    in property <string> name-inside: "container";
     init => {
-        InitOrder.observed-order += "|container";
+        InitOrder.observed-order += "|" + self.name-inside;
     }
     @children
 }
@@ -61,7 +62,10 @@ TestCase := Rectangle {
     }
 
     Container {
-
+        property <string> name-outside: "container-instantiation";
+        init => {
+            InitOrder.observed-order += "|" + self.name-outside;
+        }
     }
 
     Rectangle {
@@ -79,7 +83,7 @@ TestCase := Rectangle {
 
     property <string> test_global_prop_value: InitOrder.observed-order;
 
-    property <string> expected_static_order: "start|sub1|sub2|subsub|sub3|root|sub1-use-site|container|element";
+    property <string> expected_static_order: "start|sub1|sub2|subsub|sub3|container|root|sub1-use-site|container-instantiation|element";
 
     property <bool> test: InitOrder.observed-order == expected_static_order;
 }
@@ -90,7 +94,7 @@ let instance = TestCase::new().unwrap();
 
 assert!(instance.get_test());
 slint_testing::send_mouse_click(&instance, 5., 5.);
-assert_eq!(instance.global::<InitOrder>().get_observed_order(), instance.get_expected_static_order() + "|repeater0|repeater1");
+assert_eq!(instance.global::<InitOrder<'_>>().get_observed_order(), instance.get_expected_static_order() + "|repeater0|repeater1");
 ```
 
 ```cpp
@@ -105,7 +109,7 @@ assert_eq(instance.global<InitOrder>().get_observed_order(),  instance.get_expec
 ```js
 var instance = new slint.TestCase({});
 assert(instance.test);
-instance.send_mouse_click(5., 5.);
+slintlib.private_api.send_mouse_click(instance, 5., 5.);
 assert.equal(instance.test_global_prop_value,  instance.expected_static_order + "|repeater0|repeater1");
 ```
 

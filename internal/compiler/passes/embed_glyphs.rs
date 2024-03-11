@@ -43,8 +43,7 @@ pub fn embed_glyphs<'a>(
 ) {
     use crate::diagnostics::Spanned;
 
-    let generic_diag_location =
-        component.root_element.borrow().node.as_ref().map(|e| e.to_source_location());
+    let generic_diag_location = component.root_element.borrow().to_source_location();
 
     characters_seen.extend(
         ('a'..='z')
@@ -101,7 +100,7 @@ fn embed_glyphs_with_fontdb<'a>(
     characters_seen: HashSet<char>,
     all_docs: impl Iterator<Item = &'a crate::object_tree::Document> + 'a,
     diag: &mut BuildDiagnostics,
-    generic_diag_location: Option<crate::diagnostics::SourceLocation>,
+    generic_diag_location: crate::diagnostics::SourceLocation,
 ) {
     let fallback_fonts = get_fallback_fonts(fontdb);
 
@@ -200,7 +199,7 @@ fn embed_glyphs_with_fontdb<'a>(
             fontdb.with_face_data(face_id, |font_data, face_index| {
                 let fontdue_font = match fontdue::Font::from_bytes(
                     font_data,
-                    fontdue::FontSettings { collection_index: face_index, scale: 40. },
+                    fontdue::FontSettings { collection_index: face_index, scale: 40., ..Default::default() },
                 ) {
                     Ok(fontdue_font) => fontdue_font,
                     Err(fontdue_msg) => {
@@ -298,6 +297,14 @@ fn get_fallback_fonts(fontdb: &sharedfontdb::FontDatabase) -> Vec<fontdue::Font>
             .collect::<Vec<String>>();
     }
 
+    #[cfg(target_family = "windows")]
+    {
+        fallback_families = ["Segoe UI Emoji", "Segoe UI Symbol", "Arial", "Wingdings"]
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<String>>();
+    }
+
     #[cfg(not(any(
         target_family = "windows",
         target_os = "macos",
@@ -321,7 +328,11 @@ fn get_fallback_fonts(fontdb: &sharedfontdb::FontDatabase) -> Vec<fontdue::Font>
                         .with_face_data(face_id, |face_data, face_index| {
                             fontdue::Font::from_bytes(
                                 face_data,
-                                fontdue::FontSettings { collection_index: face_index, scale: 40. },
+                                fontdue::FontSettings {
+                                    collection_index: face_index,
+                                    scale: 40.,
+                                    ..Default::default()
+                                },
                             )
                             .ok()
                         })

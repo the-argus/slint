@@ -1,25 +1,97 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-import { Palette, Typography } from "styling.slint";
+import { MaterialPalette, MaterialFontSettings } from "styling.slint";
 
 export component Switch {
-    callback toggled;
-
     in property <string> text <=> i-label.text;
-    in property<bool> enabled: true;
+    in property <bool> enabled: true;
     out property <bool> has-focus: i-focus-scope.has-focus;
     in-out property <bool> checked;
+
+    callback toggled;
+
+    function toggle-checked() {
+        if(!root.enabled) {
+            return;
+        }
+
+        root.checked = !root.checked;
+        root.toggled();
+    }
 
     min-height: max(32px, i-layout.min-height);
     vertical-stretch: 0;
     horizontal-stretch: 0;
     forward-focus: i-focus-scope;
-
     accessible-label <=> i-label.text;
     accessible-checkable: true;
     accessible-checked <=> root.checked;
     accessible-role: checkbox;
+
+    states [
+        disabled-selected when !root.enabled && root.checked  : {
+            i-label.opacity: 0.38;
+            i-label.color: MaterialPalette.accent-background;
+            track.opacity: 0.12;
+            i-handle.opacity: 0.38;
+            i-handle.width: 24px;
+            i-handle.x: track.width - 28px - 4px;
+        }
+        disabled when !root.enabled : {
+            i-label.opacity: 0.38;
+            i-label.color: MaterialPalette.accent-background;
+            track.opacity: 0.12;
+            i-handle.opacity: 0.38;
+        }
+        pressed when i-touch-area.pressed && !root.checked : {
+            state-layer.opacity: 0.12;
+            i-handle.background: MaterialPalette.control-foreground-variant;
+            i-handle.width: 28px;
+            i-handle.x: track.border-width;
+        }
+        pressed-selected when i-touch-area.pressed && root.checked : {
+            state-layer.opacity: 0.12;
+            state-layer.background: MaterialPalette.control-foreground;
+            track.background: MaterialPalette.accent-background;
+            track.border-color: MaterialPalette.accent-background;
+            i-handle.background: MaterialPalette.accent-container;
+            i-handle.width: 28px;
+            i-handle.x: track.width - 28px - 4px;
+        }
+        hover-selected when i-touch-area.has-hover && root.checked : {
+            state-layer.opacity: 0.08;
+            track.background: MaterialPalette.accent-background;
+            track.border-color: MaterialPalette.accent-background;
+            i-handle.background: MaterialPalette.accent-container;
+            i-handle.width: 24px;
+            i-handle.x: track.width - 24px - 4px;
+        }
+        hover when i-touch-area.has-hover && !root.checked : {
+            state-layer.background: MaterialPalette.control-foreground;
+            state-layer.opacity: 0.08;
+            i-handle.background: MaterialPalette.control-foreground-variant;
+        }
+        selected when !i-touch-area.has-hover && root.checked : {
+            track.background: MaterialPalette.accent-background;
+            track.border-color: MaterialPalette.accent-background;
+            i-handle.background: MaterialPalette.accent-container;
+            i-handle.width: 24px;
+            i-handle.x: track.width - 24px - 4px;
+        }
+        focused-selected when i-focus-scope.has-focus && root.checked : {
+            state-layer.opacity: 0.12;
+            track.background: MaterialPalette.accent-background;
+            track.border-color: MaterialPalette.accent-background;
+            i-handle.background: MaterialPalette.accent-container;
+            i-handle.width: 24px;
+            i-handle.x: track.width - 24px - 4px;
+        }
+        focused when i-focus-scope.has-focus && !root.checked : {
+            state-layer.background: MaterialPalette.control-foreground;
+            state-layer.opacity: 0.12;
+        }
+    ]
 
     i-layout := VerticalLayout {
         alignment: center;
@@ -34,8 +106,8 @@ export component Switch {
                 track := Rectangle {
                     border-radius: 16px;
                     border-width: 2px;
-                    border-color: Palette.outline;
-                    background: Palette.surface-variant;
+                    border-color: MaterialPalette.border;
+                    background: MaterialPalette.control-background-variant;
                 }
 
                 i-handle := Rectangle {
@@ -44,7 +116,7 @@ export component Switch {
                     width: 16px;
                     height: self.width;
                     border-radius: self.width / 2;
-                    background: Palette.outline;
+                    background: MaterialPalette.border;
 
                     state-layer := Rectangle {
                         width: 40px;
@@ -52,7 +124,7 @@ export component Switch {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                         opacity: 0;
-                        background: Palette.primary;
+                        background: MaterialPalette.accent-background;
                         border-radius: 20px;
 
                         animate opacity { duration: 300ms; easing: ease; }
@@ -65,12 +137,12 @@ export component Switch {
             }
 
             i-label := Text {
-                color: Palette.on-surface;
+                color: MaterialPalette.control-foreground;
                 horizontal-alignment: left;
                 vertical-alignment: center;
                 vertical-stretch: 0;
-                font-size: Typography.title-small.font-size;
-                font-weight: Typography.title-small.font-weight;
+                font-size: MaterialFontSettings.title-small.font-size;
+                font-weight: MaterialFontSettings.title-small.font-weight;
             }
         }
     }
@@ -96,77 +168,4 @@ export component Switch {
             return reject;
         }
     }
-
-    function toggle-checked() {
-        if(!root.enabled) {
-            return;
-        }
-
-        root.checked = !root.checked;
-        root.toggled();
-    }
-
-    states [
-        disabled-selected when !root.enabled && root.checked  : {
-            i-label.opacity: 0.38;
-            i-label.color: Palette.primary;
-            track.opacity: 0.12;
-            i-handle.opacity: 0.38;
-            i-handle.width: 24px;
-            i-handle.x: track.width - 28px - 4px;
-        }
-        disabled when !root.enabled : {
-            i-label.opacity: 0.38;
-            i-label.color: Palette.primary;
-            track.opacity: 0.12;
-            i-handle.opacity: 0.38;
-        }
-        pressed when i-touch-area.pressed && !root.checked : {
-            state-layer.opacity: 0.12;
-            i-handle.background: Palette.on-surface-variant;
-            i-handle.width: 28px;
-            i-handle.x: track.border-width;
-        }
-        pressed-selected when i-touch-area.pressed && root.checked : {
-            state-layer.opacity: 0.12;
-            state-layer.background: Palette.on-surface;
-            track.background: Palette.primary;
-            track.border-color: Palette.primary;
-            i-handle.background: Palette.primary-container;
-            i-handle.width: 28px;
-            i-handle.x: track.width - 28px - 4px;
-        }
-        hover-selected when i-touch-area.has-hover && root.checked : {
-            state-layer.opacity: 0.08;
-            track.background: Palette.primary;
-            track.border-color: Palette.primary;
-            i-handle.background: Palette.primary-container;
-            i-handle.width: 24px;
-            i-handle.x: track.width - 24px - 4px;
-        }
-        hover when i-touch-area.has-hover && !root.checked : {
-            state-layer.background: Palette.on-surface;
-            state-layer.opacity: 0.08;
-            i-handle.background: Palette.on-surface-variant;
-        }
-        selected when !i-touch-area.has-hover && root.checked : {
-            track.background: Palette.primary;
-            track.border-color: Palette.primary;
-            i-handle.background: Palette.primary-container;
-            i-handle.width: 24px;
-            i-handle.x: track.width - 24px - 4px;
-        }
-        focused-selected when i-focus-scope.has-focus && root.checked : {
-            state-layer.opacity: 0.12;
-            track.background: Palette.primary;
-            track.border-color: Palette.primary;
-            i-handle.background: Palette.primary-container;
-            i-handle.width: 24px;
-            i-handle.x: track.width - 24px - 4px;
-        }
-        focused when i-focus-scope.has-focus && !root.checked : {
-            state-layer.background: Palette.on-surface;
-            state-layer.opacity: 0.12;
-        }
-    ]
 }

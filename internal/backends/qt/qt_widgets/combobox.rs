@@ -9,10 +9,6 @@ use super::*;
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeComboBox {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     pub enabled: Property<bool>,
     pub pressed: Property<bool>,
     pub is_open: Property<bool>,
@@ -30,13 +26,6 @@ impl Item for NativeComboBox {
         }})
     }
 
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
-    }
-
     fn layout_info(
         self: Pin<&Self>,
         orientation: Orientation,
@@ -51,13 +40,11 @@ impl Item for NativeComboBox {
             option.subControls = QStyle::SC_All;
             return qApp->style()->sizeFromContents(QStyle::CT_ComboBox, &option, option.rect.size(), widget);
         });
-        LayoutInfo {
-            min: match orientation {
-                Orientation::Horizontal => size.width,
-                Orientation::Vertical => size.height,
-            } as f32,
-            ..LayoutInfo::default()
-        }
+        let min = match orientation {
+            Orientation::Horizontal => size.width,
+            Orientation::Vertical => size.height,
+        } as f32;
+        LayoutInfo { min, preferred: min, ..LayoutInfo::default() }
     }
 
     fn input_event_filter_before_children(
@@ -115,7 +102,7 @@ impl Item for NativeComboBox {
         ] {
             ensure_initialized();
             QStyleOptionComboBox option;
-            option.initFrom(widget);
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             option.currentText = std::move(text);
             option.rect = QRect(QPoint(), size / dpr);
@@ -152,10 +139,6 @@ fn slint_get_NativeComboBoxVTable() -> NativeComboBoxVTable for NativeComboBox
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeComboBoxPopup {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     widget_ptr: std::cell::Cell<SlintTypeErasedWidgetPtr>,
     animation_tracker: Property<i32>,
     pub cached_rendering_data: CachedRenderingData,
@@ -167,13 +150,6 @@ impl Item for NativeComboBoxPopup {
         self.widget_ptr.set(cpp! { unsafe [animation_tracker_property_ptr as "void*"] -> SlintTypeErasedWidgetPtr as "std::unique_ptr<SlintTypeErasedWidget>"  {
             return make_unique_animated_widget<QWidget>(animation_tracker_property_ptr);
         }})
-    }
-
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
     }
 
     fn layout_info(
@@ -231,7 +207,7 @@ impl Item for NativeComboBoxPopup {
             ensure_initialized();
             QStyleOptionComboBox cb_option;
             QStyleOptionFrame option;
-            option.initFrom(widget);
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             option.lineWidth = 0;
             option.midLineWidth = 0;

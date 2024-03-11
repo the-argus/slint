@@ -18,7 +18,7 @@ pub fn handle_clip(
     diag: &mut BuildDiagnostics,
 ) {
     let native_clip =
-        type_register.lookup_element("Clip").unwrap().as_builtin().native_class.clone();
+        type_register.lookup_builtin_element("Clip").unwrap().as_builtin().native_class.clone();
 
     crate::object_tree::recurse_elem_including_sub_components(
         component,
@@ -29,7 +29,11 @@ pub fn handle_clip(
                 return;
             }
             if elem.bindings.contains_key("clip")
-                || elem.property_analysis.borrow().get("clip").map_or(false, |a| a.is_set)
+                || elem
+                    .property_analysis
+                    .borrow()
+                    .get("clip")
+                    .map_or(false, |a| a.is_set || a.is_linked)
             {
                 match elem.builtin_type().as_ref().map(|ty| ty.name.as_str()) {
                     Some("Rectangle") => {}
@@ -40,7 +44,7 @@ pub fn handle_clip(
                     _ => {
                         diag.push_error(
                             "The 'clip' property can only be applied to a Rectangle or a Path for now".into(),
-                            &elem.bindings.get("clip").and_then(|x| x.borrow().span.clone()).or_else(|| elem.node.as_ref().map(|e| e.to_source_location())),
+                            &elem.bindings.get("clip").and_then(|x| x.borrow().span.clone()).unwrap_or_else(|| elem.to_source_location()),
                         );
                         return;
                     }
@@ -54,13 +58,13 @@ pub fn handle_clip(
 
 fn create_clip_element(parent_elem: &ElementRc, native_clip: &Rc<NativeClass>) {
     let mut parent = parent_elem.borrow_mut();
-    let clip = Rc::new(RefCell::new(Element {
+    let clip = Element::make_rc(Element {
         id: format!("{}-clip", parent.id),
         base_type: crate::langtype::ElementType::Native(native_clip.clone()),
         children: std::mem::take(&mut parent.children),
         enclosing_component: parent.enclosing_component.clone(),
         ..Element::default()
-    }));
+    });
 
     parent.children.push(clip.clone());
     drop(parent); // NamedReference::new will borrow() the parent, so we can't hold a mutable ref
@@ -75,7 +79,16 @@ fn create_clip_element(parent_elem: &ElementRc, native_clip: &Rc<NativeClass>) {
             )
         })
         .collect();
-    for optional_binding in ["border-radius", "border-width"].iter() {
+    for optional_binding in [
+        "border-radius",
+        "border-top-left-radius",
+        "border-top-right-radius",
+        "border-bottom-right-radius",
+        "border-bottom-left-radius",
+        "border-width",
+    ]
+    .iter()
+    {
         if parent_elem.borrow().bindings.contains_key(*optional_binding) {
             clip.borrow_mut().bindings.insert(
                 optional_binding.to_string(),

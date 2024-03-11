@@ -1,55 +1,60 @@
-<!-- cSpell: ignore ccmake dslint femtovg skia winit -->
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT -->
+<!-- cSpell: ignore ccmake dslint femtovg -->
 
-# Installing Or Building With CMake
+# Set Up Development Environment
 
-Slint comes with a CMake integration that automates the compilation step of the `.slint` markup language files and
-offers a CMake target for convenient linkage.
+## Prerequisites
 
-*Note*: We recommend using the Ninja generator of CMake for the most efficient build and `.slint` dependency tracking.
-Install [Ninja](https://ninja-build.org) and select the CMake Ninja backend by passing `-GNinja` or setting the `CMAKE_GENERATOR` environment variable to `Ninja`.
+* A C++ compiler that supports C++20 (e.g., **MSVC 2019 16.6** on Windows)
 
-## Binary Packages
+* **[cmake](https://cmake.org/download/)** (3.21 or newer)
 
-We offer binary packages of Slint for use with C++. These work without any Rust
-development environment.
+  * Slint comes with a CMake integration that automates the compilation step of the `.slint` markup language files and offers a CMake target for convenient linkage.
 
-You can download one of our pre-built binaries for Linux or Windows on x86-64 architectures:
+  * *Note*: We recommend using the Ninja generator of CMake for the most efficient build and `.slint` dependency tracking. Install [Ninja](https://ninja-build.org) and select the CMake Ninja backend by passing `-GNinja` or set the `CMAKE_GENERATOR` environment variable to `Ninja`.
+
+## Install Slint
+
+To install Slint, either download the [binary packages](#install-binary-packages) or [build from sources](#build-from-sources).
+
+*Note*: Binary packages are available for only Linux and Windows on x86-64 architecture. The recommended and most flexible way to use the C++ API is to build Slint from sources.
+
+### Install Binary Packages
+
+The Slint binary packages work without any Rust development environment.
+
+Steps:
 
 1. Open <https://github.com/slint-ui/slint/releases>
+
 2. Click on the latest release
-3. From "Assets" download either `slint-cpp-XXX-Linux-x86_64.tar.gz` for a Linux archive
-   or `slint-cpp-XXX-win64.exe` for a Windows installer. ("XXX" refers to the version of the latest release)
-4. Unpack the downloaded archive or run the installer.
 
-After extracting the artifact or running the installer, you need to place the installation
-directory into your `CMAKE_PREFIX_PATH` by using the `-DCMAKE_PREFIX_PATH=/path/to/installed/slint`
-argument in your cmake invocation. `find_package(Slint)` will
-then be able to find Slint from within a `CMakeLists.txt` file.
+3. From "Assets" ("XXX" refers to the version of the latest release),
 
-At runtime you might also need to add the `lib` sub-directory to the `PATH`
-environment variable on Windows or the `LD_LIBRARY_PATH` on Linux. This is
-necessary to find the Slint libraries when trying to run your program.
+   * for Linux x86-64 architecture - download `slint-cpp-XXX-Linux-x86_64.tar.gz`
+   * for Windows x86-64 architecture - download `slint-cpp-XXX-win64.exe`
 
-In the next section you will learn how to use the installed library in your application
-and how to work with `.slint` UI files.
+4. Unpack the downloaded archive (Linux) or run the installer executable (Windows).
 
-## Building From Sources
+5. Set environment variables
 
-The recommended and most flexible way to use the C++ API is to build Slint from
-sources.
+   * set `CMAKE_PREFIX_PATH` to the installation directory of Slint. Alternatively you can pass `-DCMAKE_PREFIX_PATH=/path/to/installed/slint` argument when invoking cmake. This helps `find_package(Slint)` to find Slint from within a `CMakeLists.txt` file.
+
+   * add the `lib` sub-directory in the installation directory of Slint to `LD_LIBRARY_PATH` (Linux) or to the `PATH` environment variable (Windows). This is necessary to find the Slint libraries when running a Slint program.
+
+In the next section you will learn how to use the installed library in your application and how to work with `.slint` UI files.
+
+### Build From Sources
 
 First you need to install the prerequisites:
 
 * Install Rust by following the [Rust Getting Started Guide](https://www.rust-lang.org/learn/get-started). If you already
-  have Rust installed, make sure that it's at least version 1.60 or newer. You can check which version you have installed
-  by running `rustc --version`. Once this is done, you should have the ```rustc``` compiler and the ```cargo``` build system installed in your path.
-* **[cmake](https://cmake.org/download/)** (3.21 or newer)
-* A C++ compiler that supports C++20 (e.g., **MSVC 2019 16.6** on Windows)
+  have Rust installed, make sure that it's at least version 1.70 or newer. You can check which version you have installed
+  by running `rustc --version`. Once this is done, you should have the `rustc` compiler and the `cargo` build system installed in your path.
 
-You can include Slint into your CMake project using CMake's
-[`FetchContent`](https://cmake.org/cmake/help/latest/module/FetchContent.html)
-feature. Insert the following snippet into your `CMakeLists.txt` to make CMake
-download the latest released 1.x version, compile it, and make the CMake
+You can either choose to compile Slint from source along with your application or include Slint as an external CMake package.
+
+* To compile Slint along with your application, include Slint into your CMake project using CMake's [`FetchContent`](https://cmake.org/cmake/help/latest/module/FetchContent.html) feature. Insert the following snippet into your `CMakeLists.txt` to make CMake download the latest released 1.x version, compile it, and make the CMake
 integration available:
 
 ```cmake
@@ -65,20 +70,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(Slint)
 ```
 
-If you prefer to use Slint as an external CMake package, then you build Slint from source like a regular
-CMake project, install it into a prefix directory of your choice and use `find_package(Slint)` in your `CMakeLists.txt`.
+* To include Slint as an external CMake package, build Slint from source like a regular CMake project, install it into a prefix directory of your choice and use `find_package(Slint)` in your `CMakeLists.txt`.
 
-### Resource Embedding
-
-By default, images or fonts that your Slint files reference are loaded from disk at run-time. This minimises build times, but requires that the directory structure with the files remains stable. If you want to build a program that runs anywhere, then you can configure the Slint compiler to embed such sources into the binary.
-
-Set the `SLINT_EMBED_RESOURCES` target property on your CMake target to one of the following values:
-
-* `embed-files`: The raw files are embedded in the application binary.
-* `embed-for-software-renderer`: The files will be loaded by the Slint compiler, optimized for use with the software renderer and embedded in the application binary.
-* `as-absolute-path`: The paths of files are made absolute and will be used at run-time to load the resources from the file system. This is the default.
-
-This target property is initialised from the global `DEFAULT_SLINT_EMBED_RESOURCES` cache variable. Set it to configure the default for all CMake targets.
 
 ### Features
 
@@ -104,15 +97,18 @@ This works when compiling Slint as a package, using `cmake --build` and
 
 Slint uses [Corrosion](https://github.com/corrosion-rs/corrosion) to build Slint, which is developed in Rust. You can utilize [Corrosion's global CMake variables](https://corrosion-rs.github.io/corrosion/usage.html#global-corrosion-options) to control certain aspects of the Rust build process.
 
-Furthermore, you can set the `SLINT_TARGET_CARGO_FLAGS` cache variable to specify additional flags for the Slint runtime during the build.
+Furthermore, you can set the `SLINT_LIBRARY_CARGO_FLAGS` cache variable to specify additional flags for the Slint runtime during the build.
 
-### Back-Ends
+### Platform Backends
 
-Slint needs a back-end that acts as liaison between Slint and the OS. Several
-back-ends can be built into the Slint library at the same time, but only one
-is used a run time.
+In Slint, a backend is the module that encapsulates the interaction with the operating system,
+in particular the windowing sub-system. Multiple backends can be compiled into Slint and one
+backend is selected for use at run-time on application start-up. You can configure Slint without
+any built-in backends, and instead develop your own backend by implementing Slint's platform
+abstraction and window adapter interfaces.
 
-#### Compile Time Back-End Selection
+For more information about the available backends, their system requirements, and configuration
+options, see the [Backend & Renderers Documentation](slint-reference:src/advanced/backends_and_renderers.html).
 
 By default Slint will include both the Qt and
 [winit](https://crates.io/crates/winit) back-ends -- if both are detected at
@@ -121,23 +117,9 @@ compile time. You can enable or disable back-ends using the
 you would disable the `SLINT_FEATURE_BACKEND_WINIT` option in your CMake
 project configuration.
 
-The winit back-end needs a renderer. `SLINT_FEATURE_RENDERER_FEMTOVG` is
-the only stable renderer, the other ones are experimental. If you disable the
-`SLINT_FEATURE_BACKEND_WINIT`, you will also want to disable the renderer!
-
-#### Run Time Back-End Selection
-
-It's also possible to select any of the compiled in back-ends and renderer at
-runtime, using the `SLINT_BACKEND` environment variable.
-
- * `SLINT_BACKEND=Qt` selects the Qt back-end
- * `SLINT_BACKEND=winit` selects the winit back-end
- * `SLINT_BACKEND=winit-femtovg` selects the winit back-end with the femtovg renderer
- * `SLINT_BACKEND=winit-skia` selects the winit back-end with the skia renderer
- * `SLINT_BACKEND=winit-software` selects the winit back-end with the software renderer
-
-If the selected back-end or renderer isn't available, the default will be used
-instead.
+The winit back-end needs a renderer. `SLINT_FEATURE_RENDERER_FEMTOVG` and
+`SLINT_FEATURE_RENDERER_SKIA` are the only stable renderers, the other ones are
+experimental.
 
 ### Cross-compiling
 
@@ -178,7 +160,28 @@ Set up the environment and build:
 cd <PROJECT_ROOT>
 mkdir build
 cd build
-cmake -DRust_CARGO_TARGET=aarch64-unknown-linux-gnu -DCMAKE_INSTALL_PREFIX=/slint/install/path ...
+cmake -DRust_CARGO_TARGET=aarch64-unknown-linux-gnu -DCMAKE_INSTALL_PREFIX=/slint/install/path ..
 cmake --build .
 cmake --install .
+```
+
+#### Microcontrollers
+
+To target a Microcontroller environment, all of the following additional CMake configuration options must be set when compiling Slint:
+
+| Option                                                        | Description                                                          |
+|---------------------------------------------------------------|----------------------------------------------------------------------|
+| `-DSLINT_FEATURE_FREESTANDING=ON`                             | Enables building for environments without a standard library.        |
+| `-DBUILD_SHARED_LIBS=OFF`                                     | Disables shared library support and instead builds Slint statically. |
+| `-DSLINT_FEATURE_RENDERER_SOFTWARE=ON`                        | Enable support for the software renderer.                            |
+| `-DDEFAULT_SLINT_EMBED_RESOURCES=embed-for-software-renderer` | Default to pre-compiling images and fonts.                           |
+
+
+For example, if you're targeting an MCU with a ARM Cortex-M processor, the complete command line for CMake could look like this:
+
+```sh
+cmake -DRust_CARGO_TARGET=thumbv7em-none-eabihf -DSLINT_FEATURE_FREESTANDING=ON
+      -DBUILD_SHARED_LIBS=OFF -DSLINT_FEATURE_RENDERER_SOFTWARE=ON
+      -DDEFAULT_SLINT_EMBED_RESOURCES=embed-for-software-renderer
+      ..
 ```

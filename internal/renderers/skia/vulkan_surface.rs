@@ -10,11 +10,11 @@ use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags};
 use vulkano::format::Format;
 use vulkano::image::view::ImageView;
-use vulkano::image::AttachmentImage;
-use vulkano::image::{ImageAccess, ImageViewAbstract};
-use vulkano::instance::{Instance, InstanceCreateInfo, InstanceExtensions};
-use vulkano::memory::allocator::StandardMemoryAllocator;
-use vulkano::{Handle, VulkanLibrary, VulkanObject};
+use vulkano::image::{Image, ImageUsage};
+use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions};
+use vulkano::swapchain::{Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo};
+use vulkano::sync::GpuFuture;
+use vulkano::{sync, Handle, Validated, VulkanError, VulkanLibrary, VulkanObject};
 
 // must be nonzero
 const FRAMES_IN_FLIGHT: u8 = 3;
@@ -23,13 +23,13 @@ const FRAMES_IN_FLIGHT: u8 = 3;
 pub struct VulkanSurface {
     resize_event: Cell<Option<PhysicalWindowSize>>,
     gr_context: RefCell<skia_safe::gpu::DirectContext>,
-    // must be vulkano::format::Format::B8G8R8A8_UNORM
-    images: RefCell<Vec<Arc<AttachmentImage>>>,
-    image_views: RefCell<Vec<Arc<ImageView<AttachmentImage>>>>,
-    instance_handle: ash::vk::Instance,
-    device_handle: ash::vk::PhysicalDevice,
-    frame_index: RefCell<Option<usize>>,
-    memory_allocator: RefCell<StandardMemoryAllocator>,
+    recreate_swapchain: Cell<bool>,
+    device: Arc<Device>,
+    previous_frame_end: RefCell<Option<Box<dyn GpuFuture>>>,
+    queue: Arc<Queue>,
+    swapchain: RefCell<Arc<Swapchain>>,
+    swapchain_images: RefCell<Vec<Arc<Image>>>,
+    swapchain_image_views: RefCell<Vec<Arc<ImageView>>>,
 }
 
 impl VulkanSurface {
@@ -196,8 +196,8 @@ impl super::Surface for VulkanSurface {
         let instance = Instance::new(
             library.clone(),
             InstanceCreateInfo {
+                flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
                 enabled_extensions: required_extensions,
-                enumerate_portability: true,
                 ..Default::default()
             },
         )
@@ -242,8 +242,9 @@ impl super::Surface for VulkanSurface {
 
     fn render(
         &self,
-        _size: PhysicalWindowSize,
-        callback: &dyn Fn(&mut skia_safe::Canvas, &mut skia_safe::gpu::DirectContext),
+        size: PhysicalWindowSize,
+        callback: &dyn Fn(&skia_safe::Canvas, Option<&mut skia_safe::gpu::DirectContext>),
+        pre_present_callback: &RefCell<Option<Box<dyn FnMut()>>>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
         let gr_context = &mut self.gr_context.borrow_mut();
 
@@ -273,8 +274,20 @@ impl super::Surface for VulkanSurface {
 
         let images = self.images.borrow();
 
-        if images.is_empty() {
-            return Ok(());
+        let (image_index, suboptimal, acquire_future) =
+            match vulkano::swapchain::acquire_next_image(swapchain.clone(), None)
+                .map_err(Validated::unwrap)
+            {
+                Ok(r) => r,
+                Err(VulkanError::OutOfDate) => {
+                    self.recreate_swapchain.set(true);
+                    return Ok(()); // Try again next frame
+                }
+                Err(e) => return Err(format!("Vulkan: failed to acquire next image: {e}").into()),
+            };
+
+        if suboptimal {
+            self.recreate_swapchain.set(true);
         }
 
         let dim = images[frame_index].dimensions();
@@ -283,14 +296,14 @@ impl super::Surface for VulkanSurface {
         let image_object = image_view.as_ref().image();
         let format = image_view.as_ref().format();
 
-        debug_assert_eq!(format, Some(vulkano::format::Format::B8G8R8A8_UNORM));
+        debug_assert_eq!(format, vulkano::format::Format::B8G8R8A8_UNORM);
         let (vk_format, color_type) =
             (skia_safe::gpu::vk::Format::B8G8R8A8_UNORM, skia_safe::ColorType::BGRA8888);
 
         let alloc = skia_safe::gpu::vk::Alloc::default();
         let image_info = &unsafe {
             skia_safe::gpu::vk::ImageInfo::new(
-                image_object.inner().image.handle().as_raw() as _,
+                image_object.handle().as_raw() as _,
                 alloc,
                 skia_safe::gpu::vk::ImageTiling::OPTIMAL,
                 skia_safe::gpu::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -303,11 +316,8 @@ impl super::Surface for VulkanSurface {
             )
         };
 
-        let render_target = &skia_safe::gpu::BackendRenderTarget::new_vulkan(
-            (dim.width() as _, dim.height() as _),
-            0,
-            image_info,
-        );
+        let render_target =
+            &skia_safe::gpu::backend_render_targets::make_vk((width, height), image_info);
 
         let mut skia_surface = skia_safe::gpu::surfaces::wrap_backend_render_target(
             gr_context,
@@ -319,7 +329,7 @@ impl super::Surface for VulkanSurface {
         )
         .ok_or_else(|| format!("Error creating Skia Vulkan surface"))?;
 
-        callback(skia_surface.canvas(), gr_context);
+        callback(skia_surface.canvas(), Some(gr_context));
 
         drop(skia_surface);
 
@@ -329,8 +339,35 @@ impl super::Surface for VulkanSurface {
         // in skia
         gr_context.submit(true);
 
-        let new_frame_index = (frame_index + 1) % FRAMES_IN_FLIGHT as usize;
-        *self.frame_index.borrow_mut() = Some(new_frame_index);
+        if let Some(pre_present_callback) = pre_present_callback.borrow_mut().as_mut() {
+            pre_present_callback();
+        }
+
+        let future = self
+            .previous_frame_end
+            .borrow_mut()
+            .take()
+            .unwrap()
+            .join(acquire_future)
+            .then_swapchain_present(
+                self.queue.clone(),
+                SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_index),
+            )
+            .then_signal_fence_and_flush();
+
+        match future.map_err(Validated::unwrap) {
+            Ok(future) => {
+                *self.previous_frame_end.borrow_mut() = Some(future.boxed());
+            }
+            Err(VulkanError::OutOfDate) => {
+                self.recreate_swapchain.set(true);
+                *self.previous_frame_end.borrow_mut() = Some(sync::now(device.clone()).boxed());
+            }
+            Err(e) => {
+                *self.previous_frame_end.borrow_mut() = Some(sync::now(device.clone()).boxed());
+                return Err(format!("Skia Vulkan renderer: failed to flush future: {e}").into());
+            }
+        }
 
         Ok(())
     }
@@ -341,5 +378,69 @@ impl super::Surface for VulkanSurface {
 
     fn as_any(&self) -> &dyn core::any::Any {
         self
+    }
+}
+
+fn create_surface(
+    instance: &Arc<Instance>,
+    window_handle: raw_window_handle::WindowHandle<'_>,
+    display_handle: raw_window_handle::DisplayHandle<'_>,
+) -> Result<Arc<Surface>, vulkano::Validated<vulkano::VulkanError>> {
+    match (window_handle.raw_window_handle(), display_handle.raw_display_handle()) {
+        #[cfg(target_os = "macos")]
+        (
+            raw_window_handle::RawWindowHandle::AppKit(raw_window_handle::AppKitWindowHandle {
+                ns_view,
+                ..
+            }),
+            _,
+        ) => unsafe {
+            use cocoa::{appkit::NSView, base::id as cocoa_id};
+            use objc::runtime::YES;
+
+            let layer = metal::MetalLayer::new();
+            layer.set_opaque(false);
+            layer.set_presents_with_transaction(false);
+            let view = ns_view as cocoa_id;
+            view.setWantsLayer(YES);
+            view.setLayer(layer.as_ref() as *const _ as _);
+            Surface::from_metal(instance.clone(), layer.as_ref(), None)
+        },
+        (
+            raw_window_handle::RawWindowHandle::Xlib(raw_window_handle::XlibWindowHandle {
+                window,
+                ..
+            }),
+            raw_window_handle::RawDisplayHandle::Xlib(display),
+        ) => unsafe { Surface::from_xlib(instance.clone(), display.display, window, None) },
+        (
+            raw_window_handle::RawWindowHandle::Xcb(raw_window_handle::XcbWindowHandle {
+                window,
+                ..
+            }),
+            raw_window_handle::RawDisplayHandle::Xcb(raw_window_handle::XcbDisplayHandle {
+                connection,
+                ..
+            }),
+        ) => unsafe { Surface::from_xcb(instance.clone(), connection, window, None) },
+        (
+            raw_window_handle::RawWindowHandle::Wayland(raw_window_handle::WaylandWindowHandle {
+                surface,
+                ..
+            }),
+            raw_window_handle::RawDisplayHandle::Wayland(raw_window_handle::WaylandDisplayHandle {
+                display,
+                ..
+            }),
+        ) => unsafe { Surface::from_wayland(instance.clone(), display, surface, None) },
+        (
+            raw_window_handle::RawWindowHandle::Win32(raw_window_handle::Win32WindowHandle {
+                hwnd,
+                hinstance,
+                ..
+            }),
+            _,
+        ) => unsafe { Surface::from_win32(instance.clone(), hinstance, hwnd, None) },
+        _ => unimplemented!(),
     }
 }

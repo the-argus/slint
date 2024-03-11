@@ -21,6 +21,7 @@
 //!         Emit current line as new line
 //!
 
+#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 use euclid::num::{One, Zero};
@@ -69,7 +70,7 @@ impl<'a, Font: AbstractFont> TextLayout<'a, Font> {
         let mut line_count: i16 = 0;
         let shape_buffer = ShapeBuffer::new(self, text);
 
-        for line in TextLineBreaker::<Font>::new(text, &shape_buffer, max_width) {
+        for line in TextLineBreaker::<Font>::new(text, &shape_buffer, max_width, None) {
             max_line_width = euclid::approxord::max(max_line_width, line.text_width);
             line_count += 1;
         }
@@ -114,13 +115,14 @@ impl<'a, Font: AbstractFont> TextParagraphLayout<'a, Font> {
         selection: Option<core::ops::Range<usize>>,
     ) -> Result<Font::Length, R> {
         let wrap = self.wrap == TextWrap::WordWrap;
-        let elide_glyph = if self.overflow == TextOverflow::Elide {
+        let elide = self.overflow == TextOverflow::Elide;
+        let elide_glyph = if elide {
             self.layout.font.glyph_for_char('…').filter(|glyph| glyph.glyph_id.is_some())
         } else {
             None
         };
-        let max_width_without_elision =
-            self.max_width - elide_glyph.as_ref().map_or(Font::Length::zero(), |g| g.advance);
+        let elide_width = elide_glyph.as_ref().map_or(Font::Length::zero(), |g| g.advance);
+        let max_width_without_elision = self.max_width - elide_width;
 
         let shape_buffer = ShapeBuffer::new(&self.layout, self.string);
 
@@ -129,6 +131,7 @@ impl<'a, Font: AbstractFont> TextParagraphLayout<'a, Font> {
                 self.string,
                 &shape_buffer,
                 if wrap { Some(self.max_width) } else { None },
+                if elide { Some(self.layout.font.max_lines(self.max_height)) } else { None },
             )
         };
         let mut text_lines = None;
@@ -153,15 +156,30 @@ impl<'a, Font: AbstractFont> TextParagraphLayout<'a, Font> {
         let mut y = baseline_y;
 
         let mut process_line = |line: &TextLine<Font::Length>, glyphs: &[Glyph<Font::Length>]| {
+            let elide_long_line =
+                elide && (self.single_line || !wrap) && line.text_width > self.max_width;
+            let elide_last_line = elide
+                && line.glyph_range.end < glyphs.len()
+                && y + self.layout.font.height() * two > self.max_height;
+
+            let text_width = || {
+                if elide_long_line || elide_last_line {
+                    let mut text_width = Font::Length::zero();
+                    for glyph in &glyphs[line.glyph_range.clone()] {
+                        if text_width + glyph.advance > max_width_without_elision {
+                            break;
+                        }
+                        text_width += glyph.advance;
+                    }
+                    return text_width + elide_width;
+                }
+                euclid::approxord::min(self.max_width, line.text_width)
+            };
+
             let x = match self.horizontal_alignment {
                 TextHorizontalAlignment::Left => Font::Length::zero(),
-                TextHorizontalAlignment::Center => {
-                    self.max_width / two
-                        - euclid::approxord::min(self.max_width, line.text_width) / two
-                }
-                TextHorizontalAlignment::Right => {
-                    self.max_width - euclid::approxord::min(self.max_width, line.text_width)
-                }
+                TextHorizontalAlignment::Center => self.max_width / two - text_width() / two,
+                TextHorizontalAlignment::Right => self.max_width - text_width(),
             };
 
             let mut elide_glyph = elide_glyph.as_ref();
@@ -188,14 +206,23 @@ impl<'a, Font: AbstractFont> TextParagraphLayout<'a, Font> {
 
             let glyph_it = glyphs[line.glyph_range.clone()].iter();
             let mut glyph_x = Font::Length::zero();
-            let mut positioned_glyph_it = glyph_it.filter_map(|glyph| {
+            let mut positioned_glyph_it = glyph_it.enumerate().filter_map(|(index, glyph)| {
                 // TODO: cut off at grapheme boundaries
-                if glyph_x > max_width_without_elision {
+                if glyph_x > self.max_width {
+                    return None;
+                }
+                let elide_long_line = (elide_long_line || elide_last_line)
+                    && x + glyph_x + glyph.advance > max_width_without_elision;
+                let elide_last_line =
+                    elide_last_line && line.glyph_range.start + index == line.glyph_range.end - 1;
+                if elide_long_line || elide_last_line {
                     if let Some(elide_glyph) = elide_glyph.take() {
+                        let x = glyph_x;
+                        glyph_x += elide_glyph.advance;
                         return Some(PositionedGlyph {
-                            x: glyph_x,
+                            x,
                             y: Font::Length::zero(),
-                            advance: glyph.advance,
+                            advance: elide_glyph.advance,
                             glyph_id: elide_glyph.glyph_id.unwrap(), // checked earlier when initializing elide_glyph
                             text_byte_offset: glyph.text_byte_offset,
                         });
@@ -255,7 +282,7 @@ impl<'a, Font: AbstractFont> TextParagraphLayout<'a, Font> {
             |glyphs, line_x, line_y, line, _| {
                 last_glyph_right_edge = euclid::approxord::min(
                     self.max_width,
-                    line.width_including_trailing_whitespace(),
+                    line_x + line.width_including_trailing_whitespace(),
                 );
                 last_line_y = line_y;
                 if byte_offset >= line.byte_range.end + line.trailing_whitespace_bytes {
@@ -265,7 +292,7 @@ impl<'a, Font: AbstractFont> TextParagraphLayout<'a, Font> {
                 for positioned_glyph in glyphs {
                     if positioned_glyph.text_byte_offset == byte_offset {
                         return core::ops::ControlFlow::Break((
-                            line_x + positioned_glyph.x,
+                            euclid::approxord::min(self.max_width, line_x + positioned_glyph.x),
                             last_line_y,
                         ));
                     }
@@ -286,7 +313,7 @@ impl<'a, Font: AbstractFont> TextParagraphLayout<'a, Font> {
         let two = Font::LengthPrimitive::one() + Font::LengthPrimitive::one();
 
         match self.layout_lines(
-            |glyphs, _, line_y, line, _| {
+            |glyphs, line_x, line_y, line, _| {
                 if pos_y >= line_y + self.layout.font.height() {
                     byte_offset = line.byte_range.end;
                     return core::ops::ControlFlow::Continue(());
@@ -297,10 +324,10 @@ impl<'a, Font: AbstractFont> TextParagraphLayout<'a, Font> {
                 }
 
                 while let Some(positioned_glyph) = glyphs.next() {
-                    if pos_x >= positioned_glyph.x
-                        && pos_x <= positioned_glyph.x + positioned_glyph.advance
+                    if pos_x >= line_x + positioned_glyph.x
+                        && pos_x <= line_x + positioned_glyph.x + positioned_glyph.advance
                     {
-                        if pos_x < positioned_glyph.x + positioned_glyph.advance / two {
+                        if pos_x < line_x + positioned_glyph.x + positioned_glyph.advance / two {
                             return core::ops::ControlFlow::Break(
                                 positioned_glyph.text_byte_offset,
                             );
@@ -368,6 +395,11 @@ impl TextShaper for FixedTestFont {
         }
         .into()
     }
+
+    fn max_lines(&self, max_height: f32) -> usize {
+        let height = self.ascent() - self.descent();
+        (max_height / height).floor() as _
+    }
 }
 
 #[cfg(test)]
@@ -422,7 +454,7 @@ fn test_elision() {
                 .collect::<Vec<char>>()
         })
         .collect::<String>();
-    debug_assert_eq!(rendered_text, "This is a lon…")
+    debug_assert_eq!(rendered_text, "This is a lo…")
 }
 
 #[test]

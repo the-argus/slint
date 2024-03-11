@@ -18,10 +18,6 @@ type IntArg = (i32,);
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeSpinBox {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     pub enabled: Property<bool>,
     pub has_focus: Property<bool>,
     pub value: Property<i32>,
@@ -66,13 +62,6 @@ impl Item for NativeSpinBox {
         }})
     }
 
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
-    }
-
     fn layout_info(
         self: Pin<&Self>,
         orientation: Orientation,
@@ -109,11 +98,15 @@ impl Item for NativeSpinBox {
             return style->sizeFromContents(QStyle::CT_SpinBox, &option, line_edit_size, widget);
         });
         match orientation {
-            Orientation::Horizontal => {
-                LayoutInfo { min: size.width as f32, stretch: 1., ..LayoutInfo::default() }
-            }
+            Orientation::Horizontal => LayoutInfo {
+                min: size.width as f32,
+                preferred: size.width as f32,
+                stretch: 1.,
+                ..LayoutInfo::default()
+            },
             Orientation::Vertical => LayoutInfo {
                 min: size.height as f32,
+                preferred: size.height as f32,
                 max: size.height as f32,
                 ..LayoutInfo::default()
             },
@@ -135,7 +128,7 @@ impl Item for NativeSpinBox {
         window_adapter: &Rc<dyn WindowAdapter>,
         self_rc: &i_slint_core::items::ItemRc,
     ) -> InputEventResult {
-        let size: qttypes::QSize = get_size!(self);
+        let size: qttypes::QSize = get_size!(self_rc);
         let enabled = self.enabled();
         let mut data = self.data();
         let active_controls = data.active_controls;
@@ -198,7 +191,23 @@ impl Item for NativeSpinBox {
                     true
                 }
                 MouseEvent::Moved { .. } => false,
-                MouseEvent::Wheel { .. } => false, // TODO
+                MouseEvent::Wheel { delta_y, .. } => {
+                    if delta_y < 0. {
+                        let v = self.value();
+                        if v < self.maximum() {
+                            self.value.set(v + 1);
+                            Self::FIELD_OFFSETS.edited.apply_pin(self).call(&(v + 1,));
+                        }
+                    } else if delta_y > 0. {
+                        let v = self.value();
+                        if v > self.minimum() {
+                            self.value.set(v - 1);
+                            Self::FIELD_OFFSETS.edited.apply_pin(self).call(&(v - 1,));
+                        }
+                    }
+
+                    true
+                }
             };
         data.active_controls = new_control;
         if changed {
@@ -283,7 +292,7 @@ impl Item for NativeSpinBox {
         ] {
             auto style = qApp->style();
             QStyleOptionSpinBox option;
-            option.initFrom(widget);
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             if (enabled && has_focus) {
                 option.state |= QStyle::State_HasFocus;

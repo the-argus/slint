@@ -5,8 +5,8 @@
 
 #include "slint.h"
 
-#include <utility>
 #include <cassert>
+#include <utility>
 
 struct xcb_connection_t;
 struct wl_surface;
@@ -24,13 +24,31 @@ typedef struct objc_object NSWindow;
 
 namespace slint {
 
-/// Namespace to be used when you implement your own Platform
+/// Use the types in this namespace when implementing a custom Slint platform.
+///
+/// Slint comes with built-in support for different windowing systems, called backends. A backend
+/// is a module that implements the Platform interface in this namespace, interacts with a
+/// windowing system, and uses one of Slint's renderers to display a scene to the windowing system.
+/// A typical Slint application uses one of the built-in backends. Implement your own Platform if
+/// you're using Slint in an environment without a windowing system, such as with microcontrollers,
+/// or you're embedding a Slint UI as plugin in other applications.
+///
+/// Examples of custom platform implementation can be found in the Slint repository:
+///  - https://github.com/slint-ui/slint/tree/master/examples/cpp/platform_native
+///  - https://github.com/slint-ui/slint/tree/master/examples/cpp/platform_qt
+///  - https://github.com/slint-ui/slint/blob/master/api/cpp/esp-idf/slint/src/slint-esp.cpp
+///
+/// The entry point to re-implement a platform is the Platform class. Derive
+/// from slint::platform::Platform, and call slint::platform::set_platform
+/// to set it as the Slint platform.
+///
+/// Another important class to subclass is the WindowAdapter.
 namespace platform {
 
 /// Internal interface for a renderer for use with the WindowAdapter.
 ///
-/// You are not supposed to re-implement this class, but you can use one of the provided one
-/// such as SoftwareRenderer or SkiaRenderer.
+/// This class is not intended to be re-implemented. In places where this class is required, use
+/// of one the existing implementations such as SoftwareRenderer or SkiaRenderer.
 class AbstractRenderer
 {
 private:
@@ -46,10 +64,63 @@ private:
     friend class SkiaRenderer;
 };
 
-/// Base class for the layer between a slint::Window and the internal window from the platform
+/// Base class for the layer between a slint::Window and the windowing system specific window type,
+/// such as a Win32 `HWND` handle or a `wayland_surface_t`.
 ///
-/// Re-implement this class to do the link between the two.
+/// Re-implement this class to establish the link between the two, and pass messages in both
+/// directions:
 ///
+/// - When receiving messages from the windowing system about state changes, such as the window
+///   being resized, the user requested the window to be closed, input being received, etc. you
+///   need to call the corresponding event functions on the Window, such as
+///   Window::dispatch_resize_event(), Window::dispatch_mouse_press_event(), or
+///   Window::dispatch_close_requested_event().
+///
+/// - Slint sends requests to change visibility, position, size, etc. via virtual functions such as
+///   set_visible(), set_size(), set_position(), or update_window_properties().
+///   Re-implement these functions and delegate the requests to the windowing system.
+///
+/// If the implementation of this bi-directional message passing protocol is incomplete, the user
+/// may experience unexpected behavior, or the intention of the developer calling functions on the
+/// Window API may not be fulfilled.
+///
+/// Your WindowAdapter subclass must hold a renderer (either a SoftwareRenderer or a SkiaRenderer).
+/// In the renderer() method, you must return a reference to it.
+///
+/// # Example
+/// ```cpp
+/// class MyWindowAdapter : public slint::platform::WindowAdapter {
+///     slint::platform::SoftwareRenderer m_renderer;
+///     NativeHandle m_native_window; // a handle to the native window
+/// public:
+///     void request_redraw() override { m_native_window.refresh(); }
+///     slint::PhysicalSize size() const override {
+///        return slint::PhysicalSize({m_native_window.width, m_native_window.height});
+///     }
+///     slint::platform::AbstractRenderer &renderer() override { return m_renderer; }
+///     void set_visible(bool v) override {
+///         if (v) {
+///             m_native_window.show();
+///         } else {
+///             m_native_window.hide();
+///         }
+///     }
+///     // ...
+///     void repaint_callback();
+/// }
+/// ```
+///
+/// Rendering is typically asynchronous, and your windowing system or event loop would invoke
+/// a callback when it is time to render.
+/// ```cpp
+/// void MyWindowAdapter::repaint_callback()
+/// {
+///     slint::platform::update_timers_and_animations();
+///     m_renderer.render(m_native_window.buffer(), m_native_window.width);
+///     // if animations are running, schedule the next frame
+///     if (window().has_active_animations())  m_native_window.refresh();
+/// }
+/// ```
 class WindowAdapter
 {
     // This is a pointer to the rust window that own us.
@@ -62,7 +133,7 @@ class WindowAdapter
     cbindgen_private::WindowAdapterRcOpaque initialize()
     {
         cbindgen_private::slint_window_adapter_new(
-                this, [](void *wa) { delete reinterpret_cast<const WindowAdapter *>(wa); },
+                this, [](void *wa) { delete reinterpret_cast<WindowAdapter *>(wa); },
                 [](void *wa) {
                     return reinterpret_cast<WindowAdapter *>(wa)->renderer().renderer_handle();
                 },
@@ -71,7 +142,27 @@ class WindowAdapter
                 },
                 [](void *wa) { reinterpret_cast<WindowAdapter *>(wa)->request_redraw(); },
                 [](void *wa) -> cbindgen_private::IntSize {
-                    return reinterpret_cast<const WindowAdapter *>(wa)->physical_size();
+                    return reinterpret_cast<WindowAdapter *>(wa)->size();
+                },
+                [](void *wa, cbindgen_private::IntSize size) {
+                    reinterpret_cast<WindowAdapter *>(wa)->set_size(
+                            slint::PhysicalSize({ size.width, size.height }));
+                },
+                [](void *wa, const cbindgen_private::WindowProperties *p) {
+                    reinterpret_cast<WindowAdapter *>(wa)->update_window_properties(
+                            *reinterpret_cast<const WindowProperties *>(p));
+                },
+                [](void *wa, cbindgen_private::Point2D<int32_t> *point) -> bool {
+                    if (auto pos = reinterpret_cast<WindowAdapter *>(wa)->position()) {
+                        *point = *pos;
+                        return true;
+                    } else {
+                        return false;
+                    }
+                },
+                [](void *wa, cbindgen_private::Point2D<int32_t> point) {
+                    reinterpret_cast<WindowAdapter *>(wa)->set_position(
+                            slint::PhysicalPosition({ point.x, point.y }));
                 },
                 &self);
         was_initialized = true;
@@ -88,6 +179,9 @@ public:
     /// This function is called by Slint when the slint window is shown or hidden.
     ///
     /// Re-implement this function to forward the call to show/hide the native window
+    ///
+    /// When the window becomes visible, this is a good time to call
+    /// slint::Window::dispatch_scale_factor_change_event to initialise the scale factor.
     virtual void set_visible(bool) { }
 
     /// This function is called when Slint detects that the window need to be repainted.
@@ -98,8 +192,129 @@ public:
     /// do that in the next iteration of the event loop, or in a callback from the window manager.
     virtual void request_redraw() { }
 
+    /// Request a new size for the window to the specified size on the screen, in physical or
+    /// logical pixels and excluding a window frame (if present).
+    ///
+    /// This is called from slint::Window::set_size().
+    ///
+    /// The default implementation does nothing
+    ///
+    /// This function should sent the size to the Windowing system. If the window size actually
+    /// changes, you should call slint::Window::dispatch_resize_event to propagate the new size
+    /// to the slint view.
+    virtual void set_size(slint::PhysicalSize) { }
+
     /// Returns the actual physical size of the window
-    virtual slint::PhysicalSize physical_size() const = 0;
+    virtual slint::PhysicalSize size() = 0;
+
+    /// Sets the position of the window on the screen, in physical screen coordinates and including
+    /// a window frame (if present).
+    ///
+    /// The default implementation does nothing
+    ///
+    /// Called from slint::Window::set_position().
+    virtual void set_position(slint::PhysicalPosition) { }
+
+    /// Returns the position of the window on the screen, in physical screen coordinates and
+    /// including a window frame (if present).
+    ///
+    /// The default implementation returns std::nullopt.
+    ///
+    /// Called from slint::Window::position().
+    virtual std::optional<slint::PhysicalPosition> position() { return std::nullopt; }
+
+    /// This struct contains getters that provide access to properties of the Window
+    /// element, and is used with WindowAdapter::update_window_properties().
+    struct WindowProperties
+    {
+        /// Returns the title of the window.
+        SharedString title() const
+        {
+            SharedString out;
+            cbindgen_private::slint_window_properties_get_title(inner(), &out);
+            return out;
+        }
+
+        /// Returns the background brush of the window.
+        Brush background() const
+        {
+            Brush out;
+            cbindgen_private::slint_window_properties_get_background(inner(), &out);
+            return out;
+        }
+
+        /// \deprecated Use is_fullscreen() instead
+        [[deprecated("Renamed is_fullscreen()")]] bool fullscreen() const
+        {
+            return is_fullscreen();
+        }
+
+        /// Returns true if the window should be shown fullscreen; false otherwise.
+        bool is_fullscreen() const
+        {
+            return cbindgen_private::slint_window_properties_get_fullscreen(inner());
+        }
+
+        /// Returns true if the window should be minimized; false otherwise
+        bool is_minimized() const
+        {
+            return cbindgen_private::slint_window_properties_get_minimized(inner());
+        }
+
+        /// Returns true if the window should be maximized; false otherwise
+        bool is_maximized() const
+        {
+            return cbindgen_private::slint_window_properties_get_maximized(inner());
+        }
+
+        /// This struct describes the layout constraints of a window.
+        ///
+        /// It is the return value of WindowProperties::layout_constraints().
+        struct LayoutConstraints
+        {
+            /// This represents the minimum size the window can be. If this is set, the window
+            /// should not be able to be resized smaller than this size. If it is left unset, there
+            /// is no minimum size.
+            std::optional<LogicalSize> min;
+            /// This represents the maximum size the window can be. If this is set, the window
+            /// should not be able to be resized larger than this size. If it is left unset, there
+            /// is no maximum size.
+            std::optional<LogicalSize> max;
+            /// This represents the preferred size of the window. This is the size the window
+            /// should have by default
+            LogicalSize preferred;
+        };
+
+        /// Returns the layout constraints of the window
+        LayoutConstraints layout_constraints() const
+        {
+            auto lc = cbindgen_private::slint_window_properties_get_layout_constraints(inner());
+            return LayoutConstraints {
+                .min = lc.has_min ? std::optional(LogicalSize(lc.min)) : std::nullopt,
+                .max = lc.has_max ? std::optional(LogicalSize(lc.max)) : std::nullopt,
+                .preferred = LogicalSize(lc.preferred)
+            };
+        }
+
+    private:
+        /// This struct is opaque and cannot be constructed by C++
+        WindowProperties() = delete;
+        ~WindowProperties() = delete;
+        WindowProperties(const WindowProperties &) = delete;
+        WindowProperties &operator=(const WindowProperties &) = delete;
+        const cbindgen_private::WindowProperties *inner() const
+        {
+            return reinterpret_cast<const cbindgen_private::WindowProperties *>(this);
+        }
+    };
+
+    /// Re-implement this function to update the properties such as window title or layout
+    /// constraints.
+    ///
+    /// This function is called before `set_visible(true)`, and will be called again when the
+    /// properties that were queried on the last call are changed. If you do not query any
+    /// properties, it may not be called again.
+    virtual void update_window_properties(const WindowProperties &) { }
 
     /// Re-implement this function to provide a reference to the renderer for use with the window
     /// adapter.
@@ -132,11 +347,10 @@ public:
     }
 };
 
-/// The platform is acting like a factory to create a WindowAdapter
+/// The platform acts as a factory to create WindowAdapter instances.
 ///
-/// slint::platform::set_platform() need to be called before any other Slint handle
-/// are created, and if it is called, it will use the WindowAdapter provided by the
-/// create_window_adapter function.
+/// Call slint::platform::set_platform() before creating any other Slint handles. Any subsequently
+/// created Slint windows will use the WindowAdapter provided by the create_window_adapter function.
 class Platform
 {
 public:
@@ -148,15 +362,38 @@ public:
     /// Returns a new WindowAdapter
     virtual std::unique_ptr<WindowAdapter> create_window_adapter() = 0;
 
-#ifndef SLINT_FEATURE_STD
+#if defined(SLINT_FEATURE_FREESTANDING) || defined(DOXYGEN)
     /// Returns the amount of milliseconds since start of the application.
     ///
-    /// This function should only be implemented  if the runtime is compiled with no_std
-    virtual std::chrono::milliseconds duration_since_start() const
+    /// This function should only be implemented  if the runtime is compiled with
+    /// SLINT_FEATURE_FREESTANDING
+    virtual std::chrono::milliseconds duration_since_start() = 0;
+#endif
+
+    /// The type of clipboard used in Platform::clipboard_text and PLatform::set_clipboard_text.
+    enum class Clipboard {
+        /// This is the default clipboard used for text action for Ctrl+V,  Ctrl+C.
+        /// Corresponds to the secondary selection on X11.
+        DefaultClipboard = static_cast<uint8_t>(cbindgen_private::Clipboard::DefaultClipboard),
+        /// This is the clipboard that is used when text is selected
+        /// Corresponds to the primary selection on X11.
+        /// The Platform implementation should do nothing if copy on select is not supported on that
+        /// platform.
+        SelectionClipboard = static_cast<uint8_t>(cbindgen_private::Clipboard::SelectionClipboard),
+    };
+
+    /// Sends the given text into the system clipboard.
+    ///
+    /// If the platform doesn't support the specified clipboard, this function should do nothing
+    virtual void set_clipboard_text(const SharedString &, Clipboard) { }
+
+    /// Returns a copy of text stored in the system clipboard, if any.
+    ///
+    /// If the platform doesn't support the specified clipboard, the function should return nullopt
+    virtual std::optional<SharedString> clipboard_text(Clipboard)
     {
         return {};
     }
-#endif
 
     /// Spins an event loop and renders the visible windows.
     virtual void run_event_loop() { }
@@ -230,11 +467,24 @@ inline void set_platform(std::unique_ptr<Platform> platform)
                 (void)w.release();
             },
             []([[maybe_unused]] void *p) -> uint64_t {
-#ifdef SLINT_FEATURE_STD
+#ifndef SLINT_FEATURE_FREESTANDING
                 return 0;
 #else
-                return reinterpret_cast<const Platform *>(p)->duration_since_start().count();
+                return reinterpret_cast<Platform *>(p)->duration_since_start().count();
 #endif
+            },
+            [](void *p, const SharedString *text, cbindgen_private::Clipboard clipboard) {
+                reinterpret_cast<Platform *>(p)->set_clipboard_text(
+                        *text, static_cast<Platform::Clipboard>(clipboard));
+            },
+            [](void *p, SharedString *out_text, cbindgen_private::Clipboard clipboard) -> bool {
+                auto maybe_clipboard = reinterpret_cast<Platform *>(p)->clipboard_text(
+                        static_cast<Platform::Clipboard>(clipboard));
+
+                bool status = maybe_clipboard.has_value();
+                if (status)
+                    *out_text = *maybe_clipboard;
+                return status;
             },
             [](void *p) { return reinterpret_cast<Platform *>(p)->run_event_loop(); },
             [](void *p) { return reinterpret_cast<Platform *>(p)->quit_event_loop(); },
@@ -244,41 +494,23 @@ inline void set_platform(std::unique_ptr<Platform> platform)
 }
 
 #ifdef SLINT_FEATURE_RENDERER_SOFTWARE
-/// Represents a region on the screen, used for partial rendering.
-///
-/// The region may be composed of multiple sub-regions.
-struct PhysicalRegion
-{
-    /// Returns the size of the bounding box of this region.
-    PhysicalSize bounding_box_size() const
-    {
-        return PhysicalSize({ uint32_t(inner.width), uint32_t(inner.height) });
-    }
-    /// Returns the origin of the bounding box of this region.
-    PhysicalPosition bounding_box_origin() const { return PhysicalPosition({ inner.x, inner.y }); }
-
-private:
-    cbindgen_private::types::IntRect inner;
-    friend class SoftwareRenderer;
-    PhysicalRegion(cbindgen_private::types::IntRect inner) : inner(inner) { }
-};
 
 /// A 16bit pixel that has 5 red bits, 6 green bits and 5 blue bits
 struct Rgb565Pixel
 {
-    /// The red component, encoded in 5 bits.
-    uint16_t r : 5;
-    /// The green component, encoded in 6 bits.
-    uint16_t g : 6;
     /// The blue component, encoded in 5 bits.
     uint16_t b : 5;
+    /// The green component, encoded in 6 bits.
+    uint16_t g : 6;
+    /// The red component, encoded in 5 bits.
+    uint16_t r : 5;
 
     /// Default constructor.
-    constexpr Rgb565Pixel() : r(0), g(0), b(0) { }
+    constexpr Rgb565Pixel() : b(0), g(0), r(0) { }
 
     /// \brief Constructor that constructs from an Rgb8Pixel.
     explicit constexpr Rgb565Pixel(const Rgb8Pixel &pixel)
-        : r(pixel.r >> 3), g(pixel.g >> 2), b(pixel.b >> 3)
+        : b(pixel.b >> 3), g(pixel.g >> 2), r(pixel.r >> 3)
     {
     }
 
@@ -323,6 +555,28 @@ class SoftwareRenderer : public AbstractRenderer
     }
 
 public:
+    /// Represents a region on the screen, used for partial rendering.
+    ///
+    /// The region may be composed of multiple sub-regions.
+    struct PhysicalRegion
+    {
+        /// Returns the size of the bounding box of this region.
+        PhysicalSize bounding_box_size() const
+        {
+            return PhysicalSize({ uint32_t(inner.width), uint32_t(inner.height) });
+        }
+        /// Returns the origin of the bounding box of this region.
+        PhysicalPosition bounding_box_origin() const
+        {
+            return PhysicalPosition({ inner.x, inner.y });
+        }
+
+    private:
+        cbindgen_private::types::IntRect inner;
+        friend class SoftwareRenderer;
+        PhysicalRegion(cbindgen_private::types::IntRect inner) : inner(inner) { }
+    };
+
     /// This enum describes which parts of the buffer passed to the SoftwareRenderer may be
     /// re-used to speed up painting.
     enum class RepaintBufferType : uint32_t {
@@ -375,6 +629,30 @@ public:
                 inner, reinterpret_cast<uint16_t *>(buffer.data()), buffer.size(), pixel_stride);
         return PhysicalRegion { r };
     }
+
+#    ifdef SLINT_FEATURE_EXPERIMENTAL
+    /// This enum describes the rotation that is applied to the buffer when rendering.
+    /// To be used in set_rendering_rotation()
+    enum class RenderingRotation {
+        /// No rotation
+        NoRotation = 0,
+        /// Rotate 90° to the left
+        Rotate90 = 90,
+        /// 180° rotation (upside-down)
+        Rotate180 = 180,
+        /// Rotate 90° to the right
+        Rotate270 = 270,
+    };
+
+    /// Set how the window need to be rotated in the buffer.
+    ///
+    /// This is typically used to implement screen rotation in software
+    void set_rendering_rotation(RenderingRotation rotation)
+    {
+        cbindgen_private::slint_software_renderer_set_rendering_rotation(
+                inner, static_cast<int>(rotation));
+    }
+#    endif
 };
 #endif
 

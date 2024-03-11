@@ -1,6 +1,9 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
+component Clip {
+    // the presence of a Clip element should not impact the rest
+}
 
 MaybeClip := Rectangle {
     width: 10phx;
@@ -14,6 +17,19 @@ MaybeClip := Rectangle {
         height: 15phx;
         TouchArea {
             clicked => { touch+=1; }
+        }
+    }
+}
+
+component ClipAlias {
+    in property c <=> r.clip;
+    r := Rectangle {
+        width: 0px;
+        TouchArea {
+            width: root.width;
+            clicked => {
+                debug("Error");
+            }
         }
     }
 }
@@ -38,8 +54,10 @@ TestCase := Rectangle {
     }
 
     // MaybeClip must be inlined when "clip" is set, but not when it isn't. Test that we can have
-    // a combinaison of inlined and non inlined item
+    // a combination of inlined and non inlined item
     MaybeClip { x: 5000px; }
+
+    ClipAlias { c: true; width: 100%; height:100%; }
 
     test_rect := Rectangle { clip: true; }
     property <bool> test: test_rect.clip;

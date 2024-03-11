@@ -1,7 +1,7 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 /// Returns a list of all the `.slint` files in the `tests/cases` subfolders.
@@ -29,7 +29,11 @@ pub fn collect_test_cases() -> std::io::Result<Vec<test_driver_lib::TestCase>> {
         }
         if let Some(ext) = absolute_path.extension() {
             if ext == "60" || ext == "slint" {
-                results.push(test_driver_lib::TestCase { absolute_path, relative_path });
+                results.push(test_driver_lib::TestCase {
+                    absolute_path,
+                    relative_path,
+                    requested_style: None,
+                });
             }
         }
     }
@@ -45,9 +49,9 @@ fn main() -> std::io::Result<()> {
     std::env::set_var("SLINT_DEFAULT_FONT", default_font_path.clone());
     println!("cargo:rustc-env=SLINT_DEFAULT_FONT={}", default_font_path.display());
 
-    let mut generated_file = std::fs::File::create(
+    let mut generated_file = BufWriter::new(std::fs::File::create(
         Path::new(&std::env::var_os("OUT_DIR").unwrap()).join("generated.rs"),
-    )?;
+    )?);
 
     let references_root_dir: std::path::PathBuf =
         [env!("CARGO_MANIFEST_DIR"), "references"].iter().collect();
@@ -87,33 +91,44 @@ fn main() -> std::io::Result<()> {
             String::new()
         };
 
-        let mut output = std::fs::File::create(
+        let needle = "ROTATION_THRESHOLD=";
+        let rotation_threshold = source.find(needle).map_or(0., |p| {
+            source[p + needle.len()..]
+                .find(char::is_whitespace)
+                .and_then(|end| source[p + needle.len()..][..end].parse().ok())
+                .unwrap_or_else(|| {
+                    panic!("Cannot parse {needle} for {}", testcase.relative_path.display())
+                })
+        });
+        let skip_clipping = source.contains("SKIP_CLIPPING");
+
+        let mut output = BufWriter::new(std::fs::File::create(
             Path::new(&std::env::var_os("OUT_DIR").unwrap()).join(format!("{}.rs", module_name)),
-        )?;
+        )?);
 
         generate_source(source.as_str(), &mut output, testcase).unwrap();
 
         write!(
             output,
             r"
-    #[test] fn t_{}() -> Result<(), Box<dyn std::error::Error>> {{
+    #[test] fn t_{i}() -> Result<(), Box<dyn std::error::Error>> {{
     use crate::testing;
 
     let window = testing::init_swr();
     {scale_factor}
     window.set_size(slint::PhysicalSize::new(64, 64));
     let screenshot = {reference_path};
+    let options = testing::TestCaseOptions {{ rotation_threshold: {rotation_threshold}f32, skip_clipping: {skip_clipping} }};
 
     let instance = TestCase::new().unwrap();
     instance.show().unwrap();
 
-    testing::assert_with_render(screenshot, window.clone());
+    testing::assert_with_render(screenshot, window.clone(), &options);
 
-    testing::assert_with_render_by_line(screenshot, window.clone());
+    testing::assert_with_render_by_line(screenshot, window.clone(), &options);
 
     Ok(())
     }}",
-            i,
         )?;
     }
 
@@ -126,7 +141,7 @@ fn main() -> std::io::Result<()> {
 
 fn generate_source(
     source: &str,
-    output: &mut std::fs::File,
+    output: &mut impl Write,
     testcase: test_driver_lib::TestCase,
 ) -> Result<(), std::io::Error> {
     use i_slint_compiler::{diagnostics::BuildDiagnostics, *};
@@ -136,13 +151,14 @@ fn generate_source(
         .collect::<Vec<_>>();
 
     let mut diag = BuildDiagnostics::default();
-    let syntax_node = parser::parse(source.to_owned(), Some(&testcase.absolute_path), &mut diag);
+    let syntax_node =
+        parser::parse(source.to_owned(), Some(&testcase.absolute_path), None, &mut diag);
     let mut compiler_config = CompilerConfiguration::new(generator::OutputFormat::Rust);
     compiler_config.include_paths = include_paths;
     compiler_config.embed_resources = EmbedResourcesKind::EmbedTextures;
     compiler_config.enable_component_containers = true;
     compiler_config.style = Some("fluent".to_string());
-    let (root_component, diag) =
+    let (root_component, diag, _) =
         spin_on::spin_on(compile_syntax_node(syntax_node, diag, compiler_config));
 
     if diag.has_error() {

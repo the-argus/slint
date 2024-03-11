@@ -3,7 +3,7 @@
 
 [package]
 name = "opengl_underlay"
-version = "1.2.0"
+version = "1.5.0"
 authors = ["Slint Developers <info@slint.dev>"]
 edition = "2021"
 build = "build.rs"
@@ -16,8 +16,8 @@ name = "opengl_underlay"
 
 [dependencies]
 slint = { path = "../../api/rs/slint" }
-glow = { version = "0.12" }
-instant = { version = "0.1", features = [ "now" ] }
+glow = { version = "0.13" }
+web-time = { version = "1.0" }
 
 [build-dependencies]
 slint-build = { path = "../../api/rs/build" }
@@ -34,4 +34,3 @@ slint-build = { path = "../../api/rs/build" }
 #wasm# wasm-bindgen = { version = "0.2" }
 #wasm# web-sys = { version = "0.3", features=["console"] }
 #wasm# console_error_panic_hook = "0.1.5"
-#wasm# instant = { version = "0.1", features = [ "wasm-bindgen" ] }

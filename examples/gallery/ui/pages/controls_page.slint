@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { Button, GroupBox, SpinBox, ComboBox, CheckBox, LineEdit, TabWidget, VerticalBox, HorizontalBox,
-    Slider, ProgressIndicator, SpinBox, Switch } from "std-widgets.slint";
+    Slider, ProgressIndicator, SpinBox, Switch, Spinner, GridBox } from "std-widgets.slint";
 import { GallerySettings } from "../gallery_settings.slint";
 import { Page } from "page.slint";
 
@@ -14,38 +14,53 @@ export component ControlsPage inherits Page {
         vertical-stretch: 0;
         title: @tr("Buttons");
 
-        HorizontalBox {
-            alignment: start;
+        VerticalLayout {
             padding: 0px;
 
-            Button {
-                text: @tr("Regular Button");
-                enabled: GallerySettings.widgets-enabled;
+            HorizontalBox {
+                alignment: start;
+
+                Button {
+                    text: @tr("Regular Button");
+                    enabled: GallerySettings.widgets-enabled;
+                }
+
+                Button {
+                    text: @tr("Primary Button with Icon");
+                    icon: @image-url("../../thumbsup.png");
+                    enabled: GallerySettings.widgets-enabled;
+                    primary: true;
+                }
+
+                Button {
+                    icon: @image-url("../../thumbsup.png");
+                    enabled: GallerySettings.widgets-enabled;
+                    primary: true;
+                }
+
+                Button {
+                    checkable: true;
+                    text: self.checked ? @tr("ON") : @tr("OFF");
+                    enabled: GallerySettings.widgets-enabled;
+                }
             }
 
-            Button {
-                text: @tr("Primary Button with Icon");
-                icon: @image-url("../../thumbsup.png");
-                enabled: GallerySettings.widgets-enabled;
-                primary: true;
-            }
+            HorizontalBox {
+                alignment: start;
 
-            Button {
-                icon: @image-url("../../thumbsup.png");
-                enabled: GallerySettings.widgets-enabled;
-                primary: true;
-            }
-
-            Button {
-                checkable: true;
-                text: self.checked ? @tr("ON") : @tr("OFF");
-                enabled: GallerySettings.widgets-enabled;
+                Button {
+                    text: @tr("Primary Button with colorized icon");
+                    icon: @image-url("../../thumbsup.png");
+                    enabled: GallerySettings.widgets-enabled;
+                    colorize-icon: true;
+                    primary: true;
+                }
             }
         }
     }
 
     GroupBox {
-        title: @tr("CheckBox - SpinBox - ComboBox - Switch");
+        title: @tr("CheckBox - ComboBox - Switch");
         vertical-stretch: 0;
 
         HorizontalBox {
@@ -106,19 +121,33 @@ export component ControlsPage inherits Page {
     }
 
     GroupBox {
-        title: @tr("ProgressIndicator");
+        title: @tr("ProgressIndicator | Spinner");
         vertical-stretch: 0;
 
-        VerticalLayout {
+        GridBox {
             spacing: 16px;
 
             i-progress-indicator := ProgressIndicator {
+                row: 0;
+                col: 0;
                 min-width: 160px;
                 progress: (i-slider.value - i-slider.minimum) / (i-slider.maximum - i-slider.minimum);
                 indeterminate: true;
             }
 
+            Rectangle {
+                row: 0;
+                col: 1;
+                rowspan: 2;
+                Spinner {
+                    progress: i-progress-indicator.progress;
+                    indeterminate: i-progress-indicator.indeterminate;
+                }
+            }
+
             CheckBox {
+                row: 1;
+                col: 0;
                 text: @tr("indeterminate");
                 checked <=> i-progress-indicator.indeterminate;
             }

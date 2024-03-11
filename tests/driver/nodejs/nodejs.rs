@@ -4,36 +4,52 @@
 use std::error::Error;
 use std::{fs::File, io::Write, path::PathBuf};
 
+#[track_caller]
+fn check_output(o: std::process::Output) {
+    if !o.status.success() {
+        eprintln!(
+            "STDERR:\n{}\nSTDOUT:\n{}",
+            String::from_utf8_lossy(&o.stderr),
+            String::from_utf8_lossy(&o.stdout),
+        );
+        //panic!("Build Failed {:?}", o.status);
+    }
+}
+
 lazy_static::lazy_static! {
     static ref NODE_API_JS_PATH: PathBuf = {
-        let  node_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../api/node");
+        let node_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../api/node");
 
         // On Windows npm is 'npm.cmd', which Rust's process::Command doesn't look for as extension, because
-         // it tries to emulate CreateProcess.
-         let npm = which::which("npm").unwrap();
+        // it tries to emulate CreateProcess.
+        let npm = which::which("npm").unwrap();
 
-        // Ensure TypeScript is installed
-       std::process::Command::new(npm.clone())
-            .arg("install")
-            .arg("--ignore-scripts")
-            .arg("--no-audit")
-            .current_dir(node_dir.clone())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
-            .map_err(|err| format!("Could not launch npm install: {}", err)).unwrap();
+        // installs the slint node package dependencies
+        let o = std::process::Command::new(npm.clone())
+                .arg("install")
+                .arg("--no-audit")
+                .arg("--ignore-scripts")
+                .current_dir(node_dir.clone())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .map_err(|err| format!("Could not launch npm install: {}", err)).unwrap();
 
-        // Build the .js file of the NodeJS API from the .ts file
-        std::process::Command::new(npm)
-            .arg("run")
-            .arg("build")
-            .current_dir(node_dir.clone())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
-            .map_err(|err| format!("Could not launch npm run build: {}", err)).unwrap();
+        check_output(o);
 
-        node_dir.join("dist").join("index.js")
+        // builds the slint node package in debug
+        let o = std::process::Command::new(npm.clone())
+                .arg("run")
+                .arg("build:debug")
+                .current_dir(node_dir.clone())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .map_err(|err| format!("Could not launch npm install: {}", err)).unwrap();
+
+        check_output(o);
+
+        node_dir.join("index.js")
     };
 }
 
@@ -48,13 +64,21 @@ pub fn test(testcase: &test_driver_lib::TestCase) -> Result<(), Box<dyn Error>> 
         r#"
                 const assert = require('assert').strict;
                 let slintlib = require(String.raw`{slintpath}`);
-                let slint = require(String.raw`{path}`);
+                let slint = slintlib.loadFile(String.raw`{path}`);
         "#,
         slintpath = slintpath.to_string_lossy(),
         path = testcase.absolute_path.to_string_lossy()
     )?;
     let source = std::fs::read_to_string(&testcase.absolute_path)?;
     let include_paths = test_driver_lib::extract_include_paths(&source);
+    let library_paths = test_driver_lib::extract_library_paths(&source)
+        .map(|(k, v)| {
+            let mut abs_path = testcase.absolute_path.clone();
+            abs_path.pop();
+            abs_path.push(v);
+            format!("{}={}", k, abs_path.to_string_lossy())
+        })
+        .collect::<Vec<_>>();
     for x in test_driver_lib::extract_test_functions(&source).filter(|x| x.language_id == "js") {
         write!(main_js, "{{\n    {}\n}}\n", x.source.replace("\n", "\n    "))?;
     }
@@ -62,8 +86,8 @@ pub fn test(testcase: &test_driver_lib::TestCase) -> Result<(), Box<dyn Error>> 
     let output = std::process::Command::new("node")
         .arg(dir.path().join("main.js"))
         .current_dir(dir.path())
-        .env("SLINT_NODE_NATIVE_LIB", std::env::var_os("SLINT_NODE_NATIVE_LIB").unwrap())
         .env("SLINT_INCLUDE_PATH", std::env::join_paths(include_paths).unwrap())
+        .env("SLINT_LIBRARY_PATH", std::env::join_paths(library_paths).unwrap())
         .env("SLINT_SCALE_FACTOR", "1") // We don't have a testing backend, but we can try to force a SF1 as the tests expect.
         .env("SLINT_ENABLE_EXPERIMENTAL_FEATURES", "1")
         .stdout(std::process::Stdio::piped())

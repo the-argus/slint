@@ -7,8 +7,10 @@
 #![warn(missing_docs)]
 
 use crate::SharedVector;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
 use core::fmt::{Debug, Display, Write};
+#[cfg(not(feature = "std"))]
 use core::iter::FromIterator;
 use core::ops::Deref;
 
@@ -375,7 +377,7 @@ pub(crate) mod ffi {
     /// The resulting structure must be passed to slint_shared_string_drop
     #[no_mangle]
     pub unsafe extern "C" fn slint_shared_string_from_number(out: *mut SharedString, n: f64) {
-        let str = crate::format!("{}", n);
+        let str = crate::format!("{}", n as f32);
         core::ptr::write(out, str);
     }
 
@@ -397,6 +399,13 @@ pub(crate) mod ffi {
             let mut s = core::mem::MaybeUninit::uninit();
             slint_shared_string_from_number(s.as_mut_ptr(), 0.);
             assert_eq!(s.assume_init(), "0");
+
+            let mut s = core::mem::MaybeUninit::uninit();
+            slint_shared_string_from_number(
+                s.as_mut_ptr(),
+                ((1235.82756f32 * 1000f32).round() / 1000f32) as _,
+            );
+            assert_eq!(s.assume_init(), "1235.828");
         }
     }
 

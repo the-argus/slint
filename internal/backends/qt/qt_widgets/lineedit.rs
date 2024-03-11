@@ -10,10 +10,6 @@ use super::*;
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeLineEdit {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     pub cached_rendering_data: CachedRenderingData,
     pub native_padding_left: Property<LogicalLength>,
     pub native_padding_right: Property<LogicalLength>,
@@ -76,24 +72,19 @@ impl Item for NativeLineEdit {
         });
     }
 
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
-    }
-
     fn layout_info(
         self: Pin<&Self>,
         orientation: Orientation,
         _window_adapter: &Rc<dyn WindowAdapter>,
     ) -> LayoutInfo {
+        let min = match orientation {
+            Orientation::Horizontal => self.native_padding_left() + self.native_padding_right(),
+            Orientation::Vertical => self.native_padding_top() + self.native_padding_bottom(),
+        }
+        .get();
         LayoutInfo {
-            min: match orientation {
-                Orientation::Horizontal => self.native_padding_left() + self.native_padding_right(),
-                Orientation::Vertical => self.native_padding_top() + self.native_padding_bottom(),
-            }
-            .get(),
+            min,
+            preferred: min,
             stretch: if orientation == Orientation::Horizontal { 1. } else { 0. },
             ..LayoutInfo::default()
         }
@@ -149,7 +140,7 @@ impl Item for NativeLineEdit {
             initial_state as "int"
         ] {
             QStyleOptionFrame option;
-            option.initFrom(widget);
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             option.rect = QRect(QPoint(), size / dpr);
             option.lineWidth = 1;

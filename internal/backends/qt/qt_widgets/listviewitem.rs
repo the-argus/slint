@@ -9,15 +9,16 @@ use super::*;
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeStandardListViewItem {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     pub item: Property<i_slint_core::model::StandardListViewItem>,
     pub index: Property<i32>,
     pub is_selected: Property<bool>,
     pub cached_rendering_data: CachedRenderingData,
     pub has_hover: Property<bool>,
+    pub has_focus: Property<bool>,
+    pub pressed: Property<bool>,
+    pub pressed_x: Property<LogicalLength>,
+    pub pressed_y: Property<LogicalLength>,
+
     /// Specify that this item is in fact used in a ComboBox
     pub combobox: Property<bool>,
     widget_ptr: std::cell::Cell<SlintTypeErasedWidgetPtr>,
@@ -30,13 +31,6 @@ impl Item for NativeStandardListViewItem {
         self.widget_ptr.set(cpp! { unsafe [animation_tracker_property_ptr as "void*"] -> SlintTypeErasedWidgetPtr as "std::unique_ptr<SlintTypeErasedWidget>"  {
             return make_unique_animated_widget<QWidget>(animation_tracker_property_ptr);
         }})
-    }
-
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
     }
 
     fn layout_info(
@@ -124,6 +118,7 @@ impl Item for NativeStandardListViewItem {
         let is_selected: bool = this.is_selected();
         let combobox: bool = this.combobox();
         let has_hover: bool = this.has_hover();
+        let has_focus: bool = this.has_focus();
         let item = this.item();
         let text: qttypes::QString = item.text.as_str().into();
         cpp!(unsafe [
@@ -134,6 +129,7 @@ impl Item for NativeStandardListViewItem {
             index as "int",
             is_selected as "bool",
             has_hover as "bool",
+            has_focus as "bool",
             text as "QString",
             initial_state as "int",
             combobox as "bool"
@@ -142,13 +138,18 @@ impl Item for NativeStandardListViewItem {
             if (combobox && qApp->style()->styleHint(QStyle::SH_ComboBox_Popup, &cb_opt, widget)) {
                 widget->setProperty("_q_isComboBoxPopupItem", true);
                 QStyleOptionMenuItem option;
-                option.initFrom(widget);
+                option.styleObject = widget;
                 option.state |= QStyle::State(initial_state);
                 option.rect = QRect(QPoint(), size / dpr);
                 option.menuRect = QRect(QPoint(), size / dpr);
                 option.state = QStyle::State_Enabled;
                 if (has_hover) {
                     option.state |= QStyle::State_MouseOver;
+                    option.state |= QStyle::State_Selected;
+                }
+
+                if (has_focus) {
+                    option.state |= QStyle::State_HasFocus;
                     option.state |= QStyle::State_Selected;
                 }
                 option.text = text;
@@ -162,15 +163,18 @@ impl Item for NativeStandardListViewItem {
                 widget->setProperty("_q_isComboBoxPopupItem", {});
             } else {
                 QStyleOptionViewItem option;
-                option.initFrom(widget);
+                option.styleObject = widget;
                 option.state |= QStyle::State(initial_state);
                 option.rect = QRect(QPoint(), size / dpr);
-                option.state = QStyle::State_Enabled;
+                option.state |= QStyle::State_Enabled;
                 if (is_selected) {
                     option.state |= QStyle::State_Selected;
                 }
                 if (has_hover) {
                     option.state |= QStyle::State_MouseOver;
+                }
+                if (has_focus) {
+                    option.state |= QStyle::State_HasFocus;
                 }
                 option.decorationPosition = QStyleOptionViewItem::Left;
                 option.decorationAlignment = Qt::AlignCenter;
@@ -183,24 +187,9 @@ impl Item for NativeStandardListViewItem {
                 option.features |= QStyleOptionViewItem::HasDisplay;
 
                 option.text = text;
-                // CE_ItemViewItem in QCommonStyle calls setClipRect on the painter and replace the clips. So we need to cheat.
-                auto engine = (*painter)->paintEngine();
-                auto old_clip = engine->systemClip();
-                auto new_clip = ((*painter)->clipRegion() * (*painter)->transform());
-                if (!old_clip.isNull())
-                    new_clip &= old_clip;
-                engine->setSystemClip(new_clip);
 
                 qApp->style()->drawPrimitive(QStyle::PE_PanelItemViewRow, &option, painter->get(), widget);
                 qApp->style()->drawControl(QStyle::CE_ItemViewItem, &option, painter->get(), widget);
-                engine->setSystemClip(old_clip);
-                // Qt is seriously bugged, setSystemClip will be scaled by the scale factor
-                auto actual_clip = engine->systemClip();
-                if (actual_clip != old_clip) {
-                    QSizeF s2 = actual_clip.boundingRect().size();
-                    QSizeF s1 = old_clip.boundingRect().size();
-                    engine->setSystemClip(old_clip * QTransform::fromScale(s1.width() / s2.width(), s1.height() / s2.height()));
-                }
             }
         });
     }

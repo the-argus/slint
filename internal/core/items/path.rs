@@ -18,7 +18,7 @@ use crate::item_rendering::CachedRenderingData;
 
 use crate::layout::{LayoutInfo, Orientation};
 use crate::lengths::{
-    LogicalLength, LogicalPoint, LogicalRect, LogicalSize, LogicalVector, PointLengths,
+    LogicalBorderRadius, LogicalLength, LogicalSize, LogicalVector, PointLengths, RectLengths,
 };
 #[cfg(feature = "rtti")]
 use crate::rtti::*;
@@ -35,10 +35,6 @@ use i_slint_core_macros::*;
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct Path {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     pub elements: Property<PathData>,
     pub fill: Property<Brush>,
     pub fill_rule: Property<FillRule>,
@@ -55,13 +51,6 @@ pub struct Path {
 impl Item for Path {
     fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
 
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
-    }
-
     fn layout_info(
         self: Pin<&Self>,
         _orientation: Orientation,
@@ -74,14 +63,15 @@ impl Item for Path {
         self: Pin<&Self>,
         event: MouseEvent,
         _window_adapter: &Rc<dyn WindowAdapter>,
-        _self_rc: &ItemRc,
+        self_rc: &ItemRc,
     ) -> InputEventFilterResult {
         if let Some(pos) = event.position() {
+            let geometry = self_rc.geometry();
             if self.clip()
                 && (pos.x < 0 as _
                     || pos.y < 0 as _
-                    || pos.x_length() > self.width()
-                    || pos.y_length() > self.height())
+                    || pos.x_length() > geometry.width_length()
+                    || pos.y_length() > geometry.height_length())
             {
                 return InputEventFilterResult::Intercept;
             }
@@ -125,7 +115,11 @@ impl Item for Path {
         let clip = self.clip();
         if clip {
             (*backend).save_state();
-            (*backend).combine_clip(size.into(), LogicalLength::zero(), LogicalLength::zero());
+            (*backend).combine_clip(
+                size.into(),
+                LogicalBorderRadius::zero(),
+                LogicalLength::zero(),
+            );
         }
         (*backend).draw_path(self, self_rc, size);
         if clip {
@@ -139,12 +133,16 @@ impl Path {
     /// Returns an iterator of the events of the path and an offset, so that the
     /// shape fits into the width/height of the path while respecting the stroke
     /// width.
-    pub fn fitted_path_events(self: Pin<&Self>) -> Option<(LogicalVector, PathDataIterator)> {
+    pub fn fitted_path_events(
+        self: Pin<&Self>,
+        self_rc: &ItemRc,
+    ) -> Option<(LogicalVector, PathDataIterator)> {
         let mut elements_iter = self.elements().iter()?;
 
         let stroke_width = self.stroke_width();
-        let bounds_width = (self.width() - stroke_width).max(LogicalLength::zero());
-        let bounds_height = (self.height() - stroke_width).max(LogicalLength::zero());
+        let geometry = self_rc.geometry();
+        let bounds_width = (geometry.width_length() - stroke_width).max(LogicalLength::zero());
+        let bounds_height = (geometry.height_length() - stroke_width).max(LogicalLength::zero());
         let offset =
             LogicalVector::from_lengths(stroke_width / 2 as Coord, stroke_width / 2 as Coord);
 

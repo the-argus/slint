@@ -1,3 +1,5 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT -->
+
 # Examples
 
 These examples demonstrate the main features of Slint and how to use them in different language environments.
@@ -92,9 +94,9 @@ Also show how a way to dynamically load widgets with the interpreter from C++.
 A Rust-only example that shows how to use the Rust image crate to do image manipulations
 and feed the result into Slint.
 
-|  Source | Online wasm Preview |
-| --- | --- |
-| [`main.rs`](./imagefilter/main.rs)   | [Online simulation](https://slint.dev/snapshots/master/demos/imagefilter/) |
+| `.slint` Design |  Rust Source | TypeScript Source | Online wasm Preview |
+| --- | --- | --- | --- |
+| [`main.slint`](./imagefilter/ui/main.slint) | [`main.rs`](./imagefilter/rust/main.rs) | [`main.ts`](./imagefilter/node/main.ts)  | [Online simulation](https://slint.dev/snapshots/master/demos/imagefilter/) |
 
 ![Screenshot of the imagefilter example](https://slint.dev/resources/imagefilter_screenshot.png "Image Filter")
 
@@ -125,7 +127,7 @@ A Rust and C++ example that shows how render Slint on top of graphical effect re
 
 ### [`opengl_texture`](./opengl_texture)
 
-A Rust and C++ example that shows how render a scene with custom OpenGL code intoa texture and render that texture within a Slint scene. For more details check out the [Readme](./opengl_texture).
+A Rust and C++ example that shows how render a scene with custom OpenGL code into a texture and render that texture within a Slint scene. For more details check out the [Readme](./opengl_texture).
 
 | `.slint` Design | Rust Source | C++ Source |
 | --- | --- | --- |

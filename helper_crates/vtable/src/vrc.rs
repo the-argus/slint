@@ -1,12 +1,11 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 // cSpell: ignore pointee repr
 
 //! implementation of vtable::Vrc
 
 use super::*;
-use core::convert::TryInto;
 use portable_atomic::{AtomicU32, Ordering};
 
 /// This trait is implemented by the [`#[vtable]`](macro@vtable) macro.
@@ -30,7 +29,8 @@ pub unsafe trait VTableMetaDropInPlace: VTableMeta {
 
 /// This is a marker type to be used in [`VRc`] and [`VWeak`] to mean that the
 /// actual type is not known.
-pub struct Dyn(());
+// Note the use of PhantomData to make this type not Send, as a VRc<T, Dyn> cannot be send between thread
+pub struct Dyn(PhantomData<*mut ()>);
 
 /// Similar to [`core::alloc::Layout`], but `repr(C)`
 #[repr(C)]
@@ -74,9 +74,8 @@ struct VRcInner<'vt, VTable: VTableMeta, X> {
 }
 
 impl<'vt, VTable: VTableMeta, X> VRcInner<'vt, VTable, X> {
-    fn data_ptr(&self) -> *const X {
-        let ptr = self as *const Self as *const u8;
-        unsafe { ptr.add(self.data_offset as usize) as *const X }
+    unsafe fn data_ptr(s: *const Self) -> *const X {
+        (s as *const u8).add(*core::ptr::addr_of!((*s).data_offset) as usize) as *const X
     }
     fn as_ref(&self) -> &X {
         let ptr = self as *const Self as *const u8;
@@ -103,25 +102,27 @@ pub struct VRc<VTable: VTableMetaDropInPlace + 'static, X = Dyn> {
 impl<VTable: VTableMetaDropInPlace + 'static, X> Drop for VRc<VTable, X> {
     fn drop(&mut self) {
         unsafe {
-            let inner = self.inner.as_ref();
-            if inner.strong_ref.fetch_sub(1, Ordering::SeqCst) == 1 {
-                let data = inner.data_ptr() as *const _ as *const u8 as *mut u8;
-                let mut layout = VTable::drop_in_place(inner.vtable, data);
+            let inner = self.inner.as_ptr();
+            if (*inner).strong_ref.fetch_sub(1, Ordering::SeqCst) == 1 {
+                let data =
+                    (inner as *mut u8).add(*core::ptr::addr_of!((*inner).data_offset) as usize);
+                let vtable = core::ptr::addr_of!((*inner).vtable);
+                let mut layout = VTable::drop_in_place(*vtable, data);
                 layout = core::alloc::Layout::new::<VRcInner<VTable, ()>>()
                     .extend(layout.try_into().unwrap())
                     .unwrap()
                     .0
                     .pad_to_align()
                     .into();
-                if inner.weak_ref.load(Ordering::SeqCst) > 1 {
+                if (*core::ptr::addr_of!((*inner).weak_ref)).load(Ordering::SeqCst) > 1 {
                     // at this point we are sure that no other thread can access the data
                     // since we still hold a weak reference, so the other weak references
                     // in other thread won't start destroying the object.
-                    self.inner.cast::<VRcInner<VTable, Layout>>().as_mut().data = layout;
+                    *(VRcInner::data_ptr(self.inner.cast::<VRcInner<VTable, Layout>>().as_ptr())
+                        as *mut Layout) = layout;
                 }
-                if inner.weak_ref.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    let vtable = inner.vtable;
-                    VTable::dealloc(vtable, self.inner.cast().as_ptr(), layout);
+                if (*core::ptr::addr_of!((*inner).weak_ref)).fetch_sub(1, Ordering::SeqCst) == 1 {
+                    VTable::dealloc(*vtable, self.inner.cast().as_ptr(), layout);
                 }
             }
         }
@@ -221,8 +222,8 @@ impl<VTable: VTableMetaDropInPlace, X> VRc<VTable, X> {
         unsafe {
             let inner = this.inner.cast::<VRcInner<VTable, u8>>();
             VRef::from_raw(
-                NonNull::from(inner.as_ref().vtable),
-                NonNull::from(&*inner.as_ref().data_ptr()),
+                NonNull::from(*::core::ptr::addr_of!((*inner.as_ptr()).vtable)),
+                NonNull::new_unchecked(VRcInner::data_ptr(inner.as_ptr()) as *mut u8),
             )
         }
     }
@@ -270,8 +271,14 @@ impl<VTable: VTableMetaDropInPlace, X /*+ HasStaticVTable<VTable>*/> Deref for V
 }
 
 // Safety: we use atomic reference count for the internal things
-unsafe impl<VTable: VTableMetaDropInPlace + 'static, X: Send + Sync> Send for VRc<VTable, X> {}
-unsafe impl<VTable: VTableMetaDropInPlace + 'static, X: Send + Sync> Sync for VRc<VTable, X> {}
+unsafe impl<VTable: VTableMetaDropInPlace + Send + Sync + 'static, X: Send + Sync> Send
+    for VRc<VTable, X>
+{
+}
+unsafe impl<VTable: VTableMetaDropInPlace + Send + Sync + 'static, X: Send + Sync> Sync
+    for VRc<VTable, X>
+{
+}
 
 /// Weak pointer for the [`VRc`] where `VTable` is a VTable struct, and
 /// `X` is the type of the instance, or [`Dyn`] if it is not known
@@ -304,13 +311,14 @@ impl<VTable: VTableMetaDropInPlace + 'static, X> Clone for VWeak<VTable, X> {
 impl<T: VTableMetaDropInPlace + 'static, X> Drop for VWeak<T, X> {
     fn drop(&mut self) {
         if let Some(i) = self.inner {
-            let inner = unsafe { i.as_ref() };
-            if inner.weak_ref.fetch_sub(1, Ordering::SeqCst) == 1 {
-                let vtable = inner.vtable;
-                unsafe {
+            unsafe {
+                if (*core::ptr::addr_of!((*i.as_ptr()).weak_ref)).fetch_sub(1, Ordering::SeqCst)
+                    == 1
+                {
                     // Safety: while allocating, we made sure that the size was big enough to
                     // hold a VRcInner<T, Layout>.
-                    let layout = i.cast::<VRcInner<T, Layout>>().as_ref().data;
+                    let vtable = &*core::ptr::addr_of!((*i.as_ptr()).vtable);
+                    let layout = *(VRcInner::data_ptr(i.cast::<VRcInner<T, Layout>>().as_ptr()));
                     T::dealloc(vtable, i.cast().as_ptr(), layout);
                 }
             }

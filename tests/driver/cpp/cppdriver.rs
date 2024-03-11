@@ -12,12 +12,21 @@ pub fn test(testcase: &test_driver_lib::TestCase) -> Result<(), Box<dyn Error>> 
     let include_paths = test_driver_lib::extract_include_paths(&source)
         .map(std::path::PathBuf::from)
         .collect::<Vec<_>>();
+    let library_paths = test_driver_lib::extract_library_paths(&source)
+        .map(|(k, v)| (k.to_string(), std::path::PathBuf::from(v)))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let cpp_namespace = test_driver_lib::extract_cpp_namespace(&source);
 
     let mut diag = BuildDiagnostics::default();
-    let syntax_node = parser::parse(source.clone(), Some(&testcase.absolute_path), &mut diag);
-    let mut compiler_config = CompilerConfiguration::new(generator::OutputFormat::Cpp);
+    let syntax_node = parser::parse(source.clone(), Some(&testcase.absolute_path), None, &mut diag);
+    let output_format =
+        generator::OutputFormat::Cpp(generator::cpp::Config { namespace: cpp_namespace });
+
+    let mut compiler_config = CompilerConfiguration::new(output_format.clone());
     compiler_config.include_paths = include_paths;
-    let (root_component, diag) =
+    compiler_config.library_paths = library_paths;
+    let (root_component, diag, _) =
         spin_on::spin_on(compile_syntax_node(syntax_node, diag, compiler_config));
 
     if diag.has_error() {
@@ -27,7 +36,7 @@ pub fn test(testcase: &test_driver_lib::TestCase) -> Result<(), Box<dyn Error>> 
 
     let mut generated_cpp: Vec<u8> = Vec::new();
 
-    generator::generate(generator::OutputFormat::Cpp, &mut generated_cpp, &root_component)?;
+    generator::generate(output_format, &mut generated_cpp, &root_component)?;
 
     if diag.has_error() {
         let vec = diag.to_string_vec();

@@ -4,15 +4,22 @@
 //! This module contains the code to receive input events from libinput
 
 use std::cell::RefCell;
+#[cfg(feature = "libseat")]
 use std::collections::HashMap;
+#[cfg(not(feature = "libseat"))]
+use std::fs::{File, OpenOptions};
 use std::os::fd::OwnedFd;
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+#[cfg(feature = "libseat")]
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd, RawFd};
+#[cfg(not(feature = "libseat"))]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::pin::Pin;
 use std::rc::Rc;
 
 use i_slint_core::api::LogicalPosition;
 use i_slint_core::platform::{PlatformError, PointerEventButton, WindowEvent};
+use i_slint_core::window::WindowAdapter;
 use i_slint_core::{Property, SharedString};
 use input::LibinputInterface;
 
@@ -20,19 +27,36 @@ use input::event::keyboard::{KeyState, KeyboardEventTrait};
 use input::event::touch::TouchEventPosition;
 use xkbcommon::*;
 
+use crate::fullscreenwindowadapter::FullscreenWindowAdapter;
+
+#[cfg(feature = "libseat")]
 struct SeatWrap {
     seat: Rc<RefCell<libseat::Seat>>,
-    device_for_fd: HashMap<RawFd, i32>,
+    device_for_fd: HashMap<RawFd, libseat::Device>,
 }
 
+#[cfg(feature = "libseat")]
+impl SeatWrap {
+    pub fn new(seat: &Rc<RefCell<libseat::Seat>>) -> input::Libinput {
+        let seat_name = seat.borrow_mut().name().to_string();
+        let mut libinput = input::Libinput::new_with_udev(Self {
+            seat: seat.clone(),
+            device_for_fd: Default::default(),
+        });
+        libinput.udev_assign_seat(&seat_name).unwrap();
+        libinput
+    }
+}
+
+#[cfg(feature = "libseat")]
 impl<'a> LibinputInterface for SeatWrap {
     fn open_restricted(&mut self, path: &Path, flags: i32) -> Result<OwnedFd, i32> {
         self.seat
             .borrow_mut()
             .open_device(&path)
-            .map(|(device, fd)| {
-                // Safety: Trust libinput to provide reasonable flags.
-                let flags = unsafe { nix::fcntl::OFlag::from_bits_unchecked(flags) };
+            .map(|device| {
+                let flags = nix::fcntl::OFlag::from_bits_retain(flags);
+                let fd = device.as_fd().as_raw_fd();
                 nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_SETFL(flags))
                     .map_err(|e| format!("Error applying libinput provided open fd flags: {e}"))
                     .unwrap();
@@ -52,32 +76,60 @@ impl<'a> LibinputInterface for SeatWrap {
     }
 }
 
+#[cfg(not(feature = "libseat"))]
+struct DirectDeviceAccess {}
+
+#[cfg(not(feature = "libseat"))]
+impl DirectDeviceAccess {
+    pub fn new() -> input::Libinput {
+        let mut libinput = input::Libinput::new_with_udev(Self {});
+        libinput.udev_assign_seat("seat0").unwrap();
+        libinput
+    }
+}
+
+#[cfg(not(feature = "libseat"))]
+impl<'a> LibinputInterface for DirectDeviceAccess {
+    fn open_restricted(&mut self, path: &Path, flags_raw: i32) -> Result<OwnedFd, i32> {
+        let flags = nix::fcntl::OFlag::from_bits_retain(flags_raw);
+        OpenOptions::new()
+            .custom_flags(flags_raw)
+            .read(
+                flags.contains(nix::fcntl::OFlag::O_RDONLY)
+                    | flags.contains(nix::fcntl::OFlag::O_RDWR),
+            )
+            .write(
+                flags.contains(nix::fcntl::OFlag::O_WRONLY)
+                    | flags.contains(nix::fcntl::OFlag::O_RDWR),
+            )
+            .open(path)
+            .map(|file| file.into())
+            .map_err(|err| err.raw_os_error().unwrap())
+    }
+    fn close_restricted(&mut self, fd: OwnedFd) {
+        drop(File::from(fd));
+    }
+}
+
 pub struct LibInputHandler<'a> {
     libinput: input::Libinput,
     token: Option<calloop::Token>,
     mouse_pos: Pin<Rc<Property<Option<LogicalPosition>>>>,
     last_touch_pos: LogicalPosition,
-    window: &'a i_slint_core::api::Window,
-    keystate: xkb::State,
+    window: &'a RefCell<Option<Rc<FullscreenWindowAdapter>>>,
+    keystate: Option<xkb::State>,
 }
 
 impl<'a> LibInputHandler<'a> {
     pub fn init<T>(
-        window: &'a i_slint_core::api::Window,
+        window: &'a RefCell<Option<Rc<FullscreenWindowAdapter>>>,
         event_loop_handle: &calloop::LoopHandle<'a, T>,
-        seat: &'a Rc<RefCell<libseat::Seat>>,
+        #[cfg(feature = "libseat")] seat: &'a Rc<RefCell<libseat::Seat>>,
     ) -> Result<Pin<Rc<Property<Option<LogicalPosition>>>>, PlatformError> {
-        let seat_name = seat.borrow_mut().name().to_string();
-        let mut libinput = input::Libinput::new_with_udev(SeatWrap {
-            seat: seat.clone(),
-            device_for_fd: Default::default(),
-        });
-        libinput.udev_assign_seat(&seat_name).unwrap();
-
-        let xkb_context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
-        let keymap = xkb::Keymap::new_from_names(&xkb_context, "", "", "", "", None, 0)
-            .ok_or_else(|| format!("Error compiling keymap"))?;
-        let keystate = xkb::State::new(&keymap);
+        #[cfg(feature = "libseat")]
+        let libinput = SeatWrap::new(seat);
+        #[cfg(not(feature = "libseat"))]
+        let libinput = DirectDeviceAccess::new();
 
         let mouse_pos_property = Rc::pin(Property::new(None));
 
@@ -87,7 +139,7 @@ impl<'a> LibInputHandler<'a> {
             mouse_pos: mouse_pos_property.clone(),
             last_touch_pos: Default::default(),
             window,
-            keystate,
+            keystate: Default::default(),
         };
 
         event_loop_handle
@@ -119,13 +171,17 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
 
         self.libinput.dispatch()?;
 
+        let Some(adapter) = self.window.borrow().clone() else {
+            return Ok(calloop::PostAction::Continue);
+        };
+        let window = adapter.window();
+        let screen_size = window.size().to_logical(window.scale_factor());
+
         for event in &mut self.libinput {
             match event {
                 input::Event::Pointer(pointer_event) => {
                     match pointer_event {
                         input::event::PointerEvent::Motion(motion_event) => {
-                            let screen_size =
-                                self.window.size().to_logical(self.window.scale_factor());
                             let mut mouse_pos =
                                 self.mouse_pos.as_ref().get().unwrap_or(LogicalPosition {
                                     x: screen_size.width / 2.,
@@ -137,7 +193,19 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
                                 .clamp(0., screen_size.height);
                             self.mouse_pos.set(Some(mouse_pos));
                             let event = WindowEvent::PointerMoved { position: mouse_pos };
-                            self.window.dispatch_event(event);
+                            window.dispatch_event(event);
+                        }
+                        input::event::PointerEvent::MotionAbsolute(abs_motion_event) => {
+                            let mouse_pos = LogicalPosition {
+                                x: abs_motion_event.absolute_x_transformed(screen_size.width as u32)
+                                    as _,
+                                y: abs_motion_event
+                                    .absolute_y_transformed(screen_size.height as u32)
+                                    as _,
+                            };
+                            self.mouse_pos.set(Some(mouse_pos));
+                            let event = WindowEvent::PointerMoved { position: mouse_pos };
+                            window.dispatch_event(event);
                         }
                         input::event::PointerEvent::Button(button_event) => {
                             // https://github.com/torvalds/linux/blob/0dd2a6fb1e34d6dcb96806bc6b111388ad324722/include/uapi/linux/input-event-codes.h#L355
@@ -156,7 +224,7 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
                                     WindowEvent::PointerReleased { position: mouse_pos, button }
                                 }
                             };
-                            self.window.dispatch_event(event);
+                            window.dispatch_event(event);
                         }
                         input::event::PointerEvent::ScrollWheel(_) => todo!(),
                         input::event::PointerEvent::ScrollFinger(_) => todo!(),
@@ -165,7 +233,6 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
                     }
                 }
                 input::Event::Touch(touch_event) => {
-                    let screen_size = self.window.size();
                     if let Some(event) = match touch_event {
                         input::event::TouchEvent::Down(touch_down_event) => {
                             self.last_touch_pos = LogicalPosition::new(
@@ -190,17 +257,25 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
                         }
                         _ => None,
                     } {
-                        self.window.dispatch_event(event);
+                        window.dispatch_event(event);
                     }
                 }
                 input::Event::Keyboard(input::event::KeyboardEvent::Key(key_event)) => {
-                    // On Linux key codes have a fixed offset of 8: https://docs.rs/xkbcommon/0.5.0/xkbcommon/xkb/type.Keycode.html
-                    let key_code = key_event.key() + 8;
+                    // On Linux key codes have a fixed offset of 8: https://docs.rs/xkbcommon/0.6.0/xkbcommon/xkb/struct.Keycode.html
+                    let key_code = xkb::Keycode::new(key_event.key() + 8);
                     let state = key_event.key_state();
 
-                    let sym = self.keystate.key_get_one_sym(key_code);
+                    let xkb_key_state = self.keystate.get_or_insert_with(|| {
+                        let xkb_context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+                        let keymap =
+                            xkb::Keymap::new_from_names(&xkb_context, "", "", "", "", None, 0)
+                                .expect("Error compiling keymap");
+                        xkb::State::new(&keymap)
+                    });
 
-                    self.keystate.update_key(
+                    let sym = xkb_key_state.key_get_one_sym(key_code);
+
+                    xkb_key_state.update_key(
                         key_code,
                         match state {
                             input::event::tablet_pad::KeyState::Pressed => xkb::KeyDirection::Down,
@@ -208,11 +283,9 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
                         },
                     );
 
-                    let control = self
-                        .keystate
+                    let control = xkb_key_state
                         .mod_name_is_active(xkb::MOD_NAME_CTRL, xkb::STATE_MODS_EFFECTIVE);
-                    let alt = self
-                        .keystate
+                    let alt = xkb_key_state
                         .mod_name_is_active(xkb::MOD_NAME_ALT, xkb::STATE_MODS_EFFECTIVE);
 
                     if state == KeyState::Pressed {
@@ -221,12 +294,12 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
                         //key_code, state, sym
                         //);
 
-                        if control && alt && sym == xkb::KEY_BackSpace
-                            || control && alt && sym == xkb::KEY_Delete
+                        if control && alt && sym == xkb::Keysym::BackSpace
+                            || control && alt && sym == xkb::Keysym::Delete
                         {
                             i_slint_core::api::quit_event_loop()
                                 .expect("Unable to quit event loop multiple times");
-                        } else if (xkb::KEY_XF86Switch_VT_1..=xkb::KEY_XF86Switch_VT_12)
+                        } else if (xkb::Keysym::XF86_Switch_VT_1..=xkb::Keysym::XF86_Switch_VT_12)
                             .contains(&sym)
                         {
                             // let target_vt = (sym - xkb::KEY_XF86Switch_VT_1 + 1) as i32;
@@ -239,7 +312,7 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
                             KeyState::Pressed => WindowEvent::KeyPressed { text },
                             KeyState::Released => WindowEvent::KeyReleased { text },
                         };
-                        self.window.dispatch_event(event);
+                        window.dispatch_event(event);
                     }
                 }
                 _ => {}
@@ -256,12 +329,14 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
         token_factory: &mut calloop::TokenFactory,
     ) -> calloop::Result<()> {
         self.token = Some(token_factory.token());
-        poll.register(
-            self.libinput.as_raw_fd(),
-            calloop::Interest::READ,
-            calloop::Mode::Level,
-            self.token.unwrap(),
-        )
+        unsafe {
+            poll.register(
+                &self.libinput,
+                calloop::Interest::READ,
+                calloop::Mode::Level,
+                self.token.unwrap(),
+            )
+        }
     }
 
     fn reregister(
@@ -271,7 +346,7 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
     ) -> calloop::Result<()> {
         self.token = Some(token_factory.token());
         poll.reregister(
-            self.libinput.as_raw_fd(),
+            &self.libinput,
             calloop::Interest::READ,
             calloop::Mode::Level,
             self.token.unwrap(),
@@ -280,15 +355,15 @@ impl<'a> calloop::EventSource for LibInputHandler<'a> {
 
     fn unregister(&mut self, poll: &mut calloop::Poll) -> calloop::Result<()> {
         self.token = None;
-        poll.unregister(self.libinput.as_raw_fd())
+        poll.unregister(&self.libinput)
     }
 }
 
-fn map_key_sym(sym: u32) -> Option<SharedString> {
+fn map_key_sym(sym: xkb::Keysym) -> Option<SharedString> {
     macro_rules! keysym_to_string {
-        ($($char:literal # $name:ident # $($_qt:ident)|* # $($_winit:ident)|* # $($xkb:ident)|*;)*) => {
+        ($($char:literal # $name:ident # $($_qt:ident)|* # $($_winit:ident $(($_pos:ident))?)|* # $($xkb:ident)|*;)*) => {
             match(sym) {
-                $($(xkb::$xkb => $char,)*)*
+                $($(xkb::Keysym::$xkb => $char,)*)*
                 _ => std::char::from_u32(xkbcommon::xkb::keysym_to_utf32(sym))?,
             }
         };

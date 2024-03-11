@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial -->
 **NOTE**: This library is an **internal** crate of the [Slint project](https://slint.dev).
 This crate should **not be used directly** by applications using Slint.
 You should use the `slint` crate instead.
@@ -32,7 +33,7 @@ To ensure that the runtime backend is selected, initialize the backend as the fi
 
 ```rust
 fn main() {
-    slint::platform::set_platform(Box::new(i_slint_backend_winit::Backend::new()));
+    slint::platform::set_platform(Box::new(i_slint_backend_winit::Backend::new().unwrap()));
     // ...
 }
 ```

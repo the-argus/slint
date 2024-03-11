@@ -10,8 +10,8 @@
         "moduleResolution": "node",
         "outDir": "./dist",
         "paths": {
-            "@preview/*": ["../../../api/wasm-interpreter/pkg/*"],
-            "@lsp/*": ["../../lsp/pkg/*"]
+            "@lsp/*": ["../../lsp/pkg/*"],
+            "@interpreter/*": ["../../../api/wasm-interpreter/pkg/*"]
         },
         "rootDir": ".",
         "skipLibCheck": true,

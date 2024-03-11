@@ -10,27 +10,55 @@ use crate::EmbedResourcesKind;
 use image::GenericImageView;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
 
-pub fn embed_images(
+pub async fn embed_images(
     component: &Rc<Component>,
     embed_files: EmbedResourcesKind,
     scale_factor: f64,
+    resource_url_mapper: &Option<Rc<dyn Fn(&str) -> Pin<Box<dyn Future<Output = Option<String>>>>>>,
     diag: &mut BuildDiagnostics,
 ) {
     let global_embedded_resources = &component.embedded_file_resources;
 
-    for component in component
+    let all_components = component
         .used_types
         .borrow()
         .sub_components
         .iter()
         .chain(component.used_types.borrow().globals.iter())
         .chain(std::iter::once(component))
-    {
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let mapped_urls = {
+        let mut urls = HashMap::<String, Option<String>>::new();
+
+        if let Some(mapper) = resource_url_mapper {
+            // Collect URLs (sync!):
+            for component in &all_components {
+                visit_all_expressions(component, |e, _| {
+                    collect_image_urls_from_expression(e, &mut urls)
+                });
+            }
+
+            // Map URLs (async -- well, not really):
+            for i in urls.iter_mut() {
+                *i.1 = (*mapper)(&i.0).await;
+            }
+        }
+
+        urls
+    };
+
+    // Use URLs (sync!):
+    for component in &all_components {
         visit_all_expressions(component, |e, _| {
             embed_images_from_expression(
                 e,
+                &mapped_urls,
                 global_embedded_resources,
                 embed_files,
                 scale_factor,
@@ -40,34 +68,58 @@ pub fn embed_images(
     }
 }
 
+fn collect_image_urls_from_expression(e: &Expression, urls: &mut HashMap<String, Option<String>>) {
+    if let Expression::ImageReference { ref resource_ref, .. } = e {
+        if let ImageReference::AbsolutePath(path) = resource_ref {
+            urls.insert(path.clone(), None);
+        }
+    };
+
+    e.visit(|e| collect_image_urls_from_expression(e, urls));
+}
+
 fn embed_images_from_expression(
     e: &mut Expression,
+    urls: &HashMap<String, Option<String>>,
     global_embedded_resources: &RefCell<HashMap<String, EmbeddedResources>>,
     embed_files: EmbedResourcesKind,
     scale_factor: f64,
     diag: &mut BuildDiagnostics,
 ) {
-    if let Expression::ImageReference { ref mut resource_ref, source_location } = e {
+    if let Expression::ImageReference { ref mut resource_ref, source_location, nine_slice: _ } = e {
         match resource_ref {
-            ImageReference::AbsolutePath(path)
+            ImageReference::AbsolutePath(path) => {
+                // used mapped path:
+                let mapped_path =
+                    urls.get(path).unwrap_or(&Some(path.clone())).clone().unwrap_or(path.clone());
+                *path = mapped_path;
+
                 if embed_files != EmbedResourcesKind::OnlyBuiltinResources
-                    || path.starts_with("builtin:/") =>
-            {
-                *resource_ref = embed_image(
-                    global_embedded_resources,
-                    embed_files,
-                    path,
-                    scale_factor,
-                    diag,
-                    source_location,
-                );
+                    || path.starts_with("builtin:/")
+                {
+                    *resource_ref = embed_image(
+                        global_embedded_resources,
+                        embed_files,
+                        &path,
+                        scale_factor,
+                        diag,
+                        source_location,
+                    );
+                }
             }
             _ => {}
         }
     };
 
     e.visit_mut(|e| {
-        embed_images_from_expression(e, global_embedded_resources, embed_files, scale_factor, diag)
+        embed_images_from_expression(
+            e,
+            urls,
+            global_embedded_resources,
+            embed_files,
+            scale_factor,
+            diag,
+        )
     });
 }
 
@@ -91,9 +143,10 @@ fn embed_image(
                 #[cfg(feature = "software-renderer")]
                 if _embed_files == EmbedResourcesKind::EmbedTextures {
                     match load_image(_file, _scale_factor) {
-                        Ok((img, original_size)) => {
+                        Ok((img, source_format, original_size)) => {
                             kind = EmbeddedResourcesKind::TextureData(generate_texture(
                                 img,
+                                source_format,
                                 original_size,
                             ))
                         }
@@ -145,7 +198,11 @@ impl Pixel for image::Rgba<u8> {
 }
 
 #[cfg(feature = "software-renderer")]
-pub fn generate_texture(image: image::RgbaImage, original_size: Size) -> Texture {
+fn generate_texture(
+    image: image::RgbaImage,
+    source_format: SourceFormat,
+    original_size: Size,
+) -> Texture {
     // Analyze each pixels
     let mut top = 0;
     let is_line_transparent = |y| {
@@ -199,9 +256,18 @@ pub fn generate_texture(image: image::RgbaImage, original_size: Size) -> Texture
             if alpha != 255 {
                 is_opaque = false;
             }
+            if alpha == 0 {
+                continue;
+            }
+            let get_pixel = || match source_format {
+                SourceFormat::RgbaPremultiplied => <[u8; 3]>::try_from(&p.0[0..3])
+                    .unwrap()
+                    .map(|v| (v as u16 * 255 / alpha as u16) as u8),
+                SourceFormat::Rgba => p.0[0..3].try_into().unwrap(),
+            };
             match color {
                 ColorState::Unset => {
-                    color = ColorState::Rgb(p.0[0..3].try_into().unwrap());
+                    color = ColorState::Rgb(get_pixel());
                 }
                 ColorState::Different => {
                     if !is_opaque {
@@ -216,7 +282,8 @@ pub fn generate_texture(image: image::RgbaImage, original_size: Size) -> Texture
                             t - u
                         }
                     };
-                    if abs_diff(a, p[0]) > 2 || abs_diff(b, p[1]) > 2 || abs_diff(c, p[2]) > 2 {
+                    let px = get_pixel();
+                    if abs_diff(a, px[0]) > 2 || abs_diff(b, px[1]) > 2 || abs_diff(c, px[2]) > 2 {
                         color = ColorState::Different
                     }
                 }
@@ -237,22 +304,28 @@ pub fn generate_texture(image: image::RgbaImage, original_size: Size) -> Texture
         total_size: Size { width: image.width(), height: image.height() },
         original_size,
         rect,
-        data: convert_image(image, format, rect),
+        data: convert_image(image, source_format, format, rect),
         format,
     }
 }
 
 #[cfg(feature = "software-renderer")]
-fn convert_image(image: image::RgbaImage, format: PixelFormat, rect: Rect) -> Vec<u8> {
+fn convert_image(
+    image: image::RgbaImage,
+    source_format: SourceFormat,
+    format: PixelFormat,
+    rect: Rect,
+) -> Vec<u8> {
     let i = image::SubImage::new(&image, rect.x() as _, rect.y() as _, rect.width(), rect.height());
-    match format {
-        PixelFormat::Rgb => {
+    match (source_format, format) {
+        (_, PixelFormat::Rgb) => {
             i.pixels().flat_map(|(_, _, p)| IntoIterator::into_iter(p.0).take(3)).collect()
         }
-        PixelFormat::Rgba => {
+        (SourceFormat::RgbaPremultiplied, PixelFormat::RgbaPremultiplied)
+        | (SourceFormat::Rgba, PixelFormat::Rgba) => {
             i.pixels().flat_map(|(_, _, p)| IntoIterator::into_iter(p.0)).collect()
         }
-        PixelFormat::RgbaPremultiplied => i
+        (SourceFormat::Rgba, PixelFormat::RgbaPremultiplied) => i
             .pixels()
             .flat_map(|(_, _, p)| {
                 let a = p.0[3] as u32;
@@ -262,38 +335,56 @@ fn convert_image(image: image::RgbaImage, format: PixelFormat, rect: Rect) -> Ve
                     .chain(std::iter::once(a as u8))
             })
             .collect(),
-        PixelFormat::AlphaMap(_) => i.pixels().map(|(_, _, p)| p[3]).collect(),
+        (SourceFormat::RgbaPremultiplied, PixelFormat::Rgba) => i
+            .pixels()
+            .flat_map(|(_, _, p)| {
+                let a = p.0[3] as u32;
+                IntoIterator::into_iter(p.0)
+                    .take(3)
+                    .map(move |x| (x as u32 * 255 / a) as u8)
+                    .chain(std::iter::once(a as u8))
+            })
+            .collect(),
+        (_, PixelFormat::AlphaMap(_)) => i.pixels().map(|(_, _, p)| p[3]).collect(),
     }
+}
+
+#[cfg(feature = "software-renderer")]
+enum SourceFormat {
+    RgbaPremultiplied,
+    Rgba,
 }
 
 #[cfg(feature = "software-renderer")]
 fn load_image(
     file: crate::fileaccess::VirtualFile,
     scale_factor: f64,
-) -> image::ImageResult<(image::RgbaImage, Size)> {
+) -> image::ImageResult<(image::RgbaImage, SourceFormat, Size)> {
     use resvg::{tiny_skia, usvg};
     use std::ffi::OsStr;
-    use usvg::TreeParsing;
     if file.canon_path.extension() == Some(OsStr::new("svg"))
         || file.canon_path.extension() == Some(OsStr::new("svgz"))
     {
         let options = usvg::Options::default();
-        let tree = match file.builtin_contents {
-            Some(data) => usvg::Tree::from_data(data, &options),
-            None => usvg::Tree::from_data(
-                std::fs::read(file.canon_path).map_err(image::ImageError::IoError)?.as_slice(),
-                &options,
-            ),
-        }
-        .map_err(|e| {
-            image::ImageError::Decoding(image::error::DecodingError::new(
-                image::error::ImageFormatHint::Name("svg".into()),
-                e,
-            ))
+        let tree = i_slint_common::sharedfontdb::FONT_DB.with(|db| {
+            match file.builtin_contents {
+                Some(data) => usvg::Tree::from_data(data, &options, &db.borrow()),
+                None => usvg::Tree::from_data(
+                    std::fs::read(&file.canon_path).map_err(image::ImageError::IoError)?.as_slice(),
+                    &options,
+                    &db.borrow(),
+                ),
+            }
+            .map_err(|e| {
+                image::ImageError::Decoding(image::error::DecodingError::new(
+                    image::error::ImageFormatHint::Name("svg".into()),
+                    e,
+                ))
+            })
         })?;
         let scale_factor = scale_factor as f32;
         // TODO: ideally we should find the size used for that `Image`
-        let original_size = tree.size;
+        let original_size = tree.size();
         let width = original_size.width() * scale_factor;
         let height = original_size.height() * scale_factor;
 
@@ -306,8 +397,8 @@ fn load_image(
         let mut skia_buffer =
             tiny_skia::PixmapMut::from_bytes(buffer.as_mut_slice(), width as u32, height as u32)
                 .ok_or_else(size_error)?;
-        let rtree = resvg::Tree::from_usvg(&tree);
-        rtree.render(
+        resvg::render(
+            &tree,
             tiny_skia::Transform::from_scale(scale_factor as _, scale_factor as _),
             &mut skia_buffer,
         );
@@ -316,6 +407,7 @@ fn load_image(
             .map(|img| {
                 (
                     img,
+                    SourceFormat::RgbaPremultiplied,
                     Size { width: original_size.width() as _, height: original_size.height() as _ },
                 )
             });
@@ -336,6 +428,10 @@ fn load_image(
             );
         }
 
-        (image.to_rgba8(), Size { width: original_width, height: original_height })
+        (
+            image.to_rgba8(),
+            SourceFormat::Rgba,
+            Size { width: original_width, height: original_height },
+        )
     })
 }

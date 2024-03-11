@@ -5,6 +5,7 @@
 #![allow(unsafe_code)]
 #![warn(missing_docs)]
 use core::fmt::Debug;
+#[cfg(not(feature = "std"))]
 use core::iter::FromIterator;
 use core::mem::MaybeUninit;
 use core::ops::Deref;
@@ -164,7 +165,7 @@ impl<T: Clone> SharedVector<T> {
     }
 
     /// Ensure that the reference count is 1 so the array can be changed.
-    /// If that's not tha case, the array will be cloned
+    /// If that's not the case, the array will be cloned
     fn detach(&mut self, new_capacity: usize) {
         let is_shared =
             unsafe { self.inner.as_ref().header.refcount.load(atomic::Ordering::Relaxed) } != 1;
@@ -202,6 +203,20 @@ impl<T: Clone> SharedVector<T> {
                 value,
             );
             self.inner.as_mut().header.size += 1;
+        }
+    }
+
+    /// Removes last element from the array and returns it.
+    /// If the array was shared, this will make a copy of the array.
+    pub fn pop(&mut self) -> Option<T> {
+        if self.is_empty() {
+            None
+        } else {
+            self.detach(self.len());
+            unsafe {
+                self.inner.as_mut().header.size -= 1;
+                Some(core::ptr::read(self.inner.as_mut().data.as_mut_ptr().add(self.len())))
+            }
         }
     }
 
@@ -301,18 +316,11 @@ impl<T: Clone> From<&[T]> for SharedVector<T> {
     }
 }
 
-macro_rules! from_array {
-    ($($n:literal)*) => { $(
-        // FIXME: remove the Clone bound
-        impl<T: Clone> From<[T; $n]> for SharedVector<T> {
-            fn from(array: [T; $n]) -> Self {
-                array.iter().cloned().collect()
-            }
-        }
-    )+ };
+impl<T, const N: usize> From<[T; N]> for SharedVector<T> {
+    fn from(array: [T; N]) -> Self {
+        array.into_iter().collect()
+    }
 }
-
-from_array! {0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31}
 
 impl<T> FromIterator<T> for SharedVector<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
@@ -456,7 +464,7 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        let mut elements: Vec<T> = serde::Deserialize::deserialize(deserializer)?;
+        let mut elements: alloc::vec::Vec<T> = serde::Deserialize::deserialize(deserializer)?;
         let mut shared_vec = SharedVector::with_capacity(elements.len());
         for elem in elements.drain(..) {
             shared_vec.push(elem);
@@ -619,6 +627,18 @@ fn test_vector_clear() {
     assert_eq!(copy.capacity(), orig_cap);
     copy.clear(); // copy is not shared (anymore), retain capacity.
     assert_eq!(copy.capacity(), orig_cap);
+}
+
+#[test]
+fn pop_test() {
+    let mut x: SharedVector<i32> = SharedVector::from([1, 2, 3]);
+    let y = x.clone();
+    assert_eq!(x.pop(), Some(3));
+    assert_eq!(x.pop(), Some(2));
+    assert_eq!(x.pop(), Some(1));
+    assert_eq!(x.pop(), None);
+    assert!(x.is_empty());
+    assert_eq!(y.as_slice(), &[1, 2, 3]);
 }
 
 #[cfg(feature = "ffi")]

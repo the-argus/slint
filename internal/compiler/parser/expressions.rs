@@ -134,6 +134,12 @@ fn parse_expression_helper(p: &mut impl Parser, precedence: OperatorPrecedence) 
         parse_expression_helper(&mut *p, OperatorPrecedence::Mul);
     }
 
+    if p.nth(0).kind() == SyntaxKind::Percent {
+        p.error("Unexpected '%'. For the unit, it should be attached to the number. If you're looking for the modulo operator, use the 'Math.mod(x, y)' function");
+        p.consume();
+        return false;
+    }
+
     if precedence >= OperatorPrecedence::Add {
         return true;
     }
@@ -218,12 +224,7 @@ fn parse_at_keyword(p: &mut impl Parser) {
     debug_assert_eq!(p.peek().kind(), SyntaxKind::At);
     match p.nth(1).as_str() {
         "image-url" | "image_url" => {
-            let mut p = p.start_node(SyntaxKind::AtImageUrl);
-            p.consume(); // "@"
-            p.consume(); // "image-url"
-            p.expect(SyntaxKind::LParent);
-            p.expect(SyntaxKind::StringLiteral);
-            p.expect(SyntaxKind::RParent);
+            parse_image_url(p);
         }
         "linear-gradient" | "linear_gradient" => {
             parse_gradient(p);
@@ -410,4 +411,82 @@ fn parse_tr(p: &mut impl Parser) {
         }
     }
     p.expect(SyntaxKind::RParent);
+}
+
+#[cfg_attr(test, parser_test)]
+/// ```test,AtImageUrl
+/// @image-url("foo.png")
+/// @image-url("foo.png",)
+/// @image-url("foo.png", nine-slice(1 2 3 4))
+/// @image-url("foo.png", nine-slice(1))
+/// ```
+fn parse_image_url(p: &mut impl Parser) {
+    let mut p = p.start_node(SyntaxKind::AtImageUrl);
+    p.consume(); // "@"
+    p.consume(); // "image-url"
+    if !(p.expect(SyntaxKind::LParent)) {
+        return;
+    }
+    let peek = p.peek();
+    if peek.kind() != SyntaxKind::StringLiteral {
+        p.error("@image-url must contain a plain path as a string literal");
+        p.until(SyntaxKind::RParent);
+        return;
+    }
+    if !peek.as_str().starts_with('"') || !peek.as_str().ends_with('"') {
+        p.error("@image-url must contain a plain path as a string literal, without any '\\{}' expressions");
+        p.until(SyntaxKind::RParent);
+        return;
+    }
+    p.expect(SyntaxKind::StringLiteral);
+    if !p.test(SyntaxKind::Comma) {
+        if !p.test(SyntaxKind::RParent) {
+            p.error("Expected ')' or ','");
+            p.until(SyntaxKind::RParent);
+        }
+        return;
+    }
+    if p.test(SyntaxKind::RParent) {
+        return;
+    }
+    if p.peek().as_str() != "nine-slice" {
+        p.error("Expected 'nine-slice(...)' argument");
+        p.until(SyntaxKind::RParent);
+        return;
+    }
+    p.consume();
+    if !p.expect(SyntaxKind::LParent) {
+        p.until(SyntaxKind::RParent);
+        return;
+    }
+    let mut count = 0;
+    loop {
+        match p.peek().kind() {
+            SyntaxKind::RParent => {
+                if count != 1 && count != 2 && count != 4 {
+                    p.error("Expected 1 or 2 or 4 numbers");
+                }
+                p.consume();
+                break;
+            }
+            SyntaxKind::NumberLiteral => {
+                count += 1;
+                p.consume();
+            }
+            SyntaxKind::Comma | SyntaxKind::Colon => {
+                p.error("Arguments of nine-slice need to be separated by spaces");
+                p.until(SyntaxKind::RParent);
+                break;
+            }
+            _ => {
+                p.error("Expected number literal or ')'");
+                p.until(SyntaxKind::RParent);
+                break;
+            }
+        }
+    }
+    if !p.expect(SyntaxKind::RParent) {
+        p.until(SyntaxKind::RParent);
+        return;
+    }
 }

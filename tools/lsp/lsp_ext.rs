@@ -6,7 +6,7 @@
 use lsp_types::notification::Notification;
 use serde::{Deserialize, Serialize};
 
-/// Taken from rust-analizer
+/// Taken from rust-analyzer
 pub enum ServerStatusNotification {}
 
 impl Notification for ServerStatusNotification {
@@ -21,7 +21,7 @@ pub struct ServerStatusParams {
     pub message: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Health {
     Ok,

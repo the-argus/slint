@@ -5,35 +5,26 @@
 
 import { Uri } from "vscode";
 import * as vscode from "vscode";
-import { LanguageClient } from "vscode-languageclient/browser";
+import {
+    BaseLanguageClient,
+    LanguageClient,
+} from "vscode-languageclient/browser";
 
 import { PropertiesViewProvider } from "./properties_webview";
 import * as wasm_preview from "./wasm_preview";
 import * as common from "./common";
 
-let client = new common.ClientHandle();
 let statusBar: vscode.StatusBarItem;
 let properties_provider: PropertiesViewProvider;
 
-function startClient(context: vscode.ExtensionContext) {
+function startClient(
+    client: common.ClientHandle,
+    context: vscode.ExtensionContext,
+) {
     //let args = vscode.workspace.getConfiguration('slint').get<[string]>('lsp-args');
 
     // Options to control the language client
-    const clientOptions = common.languageClientOptions(
-        (args: any) => {
-            wasm_preview.showPreview(
-                context,
-                vscode.Uri.parse(args[0], true),
-                args[1],
-            );
-            return true;
-        },
-        (_) => {
-            wasm_preview.toggleDesignMode();
-            return true;
-        },
-    );
-
+    const clientOptions = common.languageClientOptions();
     clientOptions.synchronize = {};
     clientOptions.initializationOptions = {};
 
@@ -53,40 +44,30 @@ function startClient(context: vscode.ExtensionContext) {
                 clientOptions,
                 worker,
             );
-            const disposable = cl.start();
-            context.subscriptions.push(disposable);
 
-            cl.onReady().then(() => {
-                client.client = cl;
-                cl.onRequest("slint/load_file", async (param: string) => {
-                    return await vscode.workspace.fs.readFile(
+            common.prepare_client(cl);
+
+            client.add_updater((cl) => {
+                cl?.onRequest("slint/load_file", async (param: string) => {
+                    let contents = await vscode.workspace.fs.readFile(
                         Uri.parse(param, true),
                     );
-                });
-                wasm_preview.initClientForPreview(cl);
-                //client.onNotification(serverStatus, (params) => setServerStatus(params, statusBar));
-
-                vscode.workspace.onDidChangeConfiguration(async (ev) => {
-                    if (ev.affectsConfiguration("slint")) {
-                        cl.sendNotification(
-                            "workspace/didChangeConfiguration",
-                            { settings: "" },
-                        );
-                        wasm_preview.refreshPreview();
-                    }
+                    return new TextDecoder().decode(contents);
                 });
             });
+
+            cl.start().then(() => (client.client = cl));
         }
     };
 }
 
 // this method is called when vs code is activated
 export function activate(context: vscode.ExtensionContext) {
-    [statusBar, properties_provider] = common.activate(context, client, (ctx) =>
-        startClient(ctx),
+    [statusBar, properties_provider] = common.activate(context, (cl, ctx) =>
+        startClient(cl, ctx),
     );
 }
 
 export function deactivate(): Thenable<void> | undefined {
-    return common.deactivate(client);
+    return common.deactivate();
 }

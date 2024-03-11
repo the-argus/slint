@@ -121,7 +121,7 @@ public:
 
     Image() : data(Data::ImageInner_None()) { }
 
-#ifdef SLINT_FEATURE_STD
+#ifndef SLINT_FEATURE_FREESTANDING
     /// Load an image from an image file
     [[nodiscard]] static Image load_from_path(const SharedString &file_path)
     {
@@ -145,7 +145,7 @@ public:
     ///
     /// Safety:
     ///
-    /// This function is unsafe because invalid texture ids may lead to undefind behavior in OpenGL
+    /// This function is unsafe because invalid texture ids may lead to undefined behavior in OpenGL
     /// drivers. A valid texture id is one that was created by the same OpenGL context that is
     /// current during any of the invocations of the callback set on
     /// [`Window::set_rendering_notifier()`]. OpenGL contexts between instances of [`slint::Window`]
@@ -208,6 +208,17 @@ public:
         } else {
             return {};
         }
+    }
+
+    /// Sets the nine-slice edges of the image.
+    ///
+    /// [Nine-slice scaling](https://en.wikipedia.org/wiki/9-slice_scaling) is a method for scaling
+    /// images in such a way that the corners are not distorted.
+    /// The arguments define the pixel sizes of the edges that cut the image into 9 slices.
+    void set_nine_slice_edges(unsigned short top, unsigned short right, unsigned short bottom,
+                              unsigned short left)
+    {
+        cbindgen_private::types::slint_image_set_nine_slice_edges(&data, top, right, bottom, left);
     }
 
     /// Returns true if \a a refers to the same image as \a b; false otherwise.

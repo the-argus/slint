@@ -26,7 +26,7 @@ pub fn handle_visible(
     }
 
     let native_clip =
-        type_register.lookup_element("Clip").unwrap().as_builtin().native_class.clone();
+        type_register.lookup_builtin_element("Clip").unwrap().as_builtin().native_class.clone();
 
     crate::object_tree::recurse_elem_including_sub_components(
         component,
@@ -54,7 +54,7 @@ pub fn handle_visible(
                             .property_analysis
                             .borrow()
                             .get("visible")
-                            .map_or(false, |a| a.is_set))
+                            .map_or(false, |a| a.is_set || a.is_linked))
             };
 
             for mut child in old_children {
@@ -64,8 +64,9 @@ pub fn handle_visible(
                         let clip_elem = create_visibility_element(&root_elem, &native_clip);
                         object_tree::inject_element_as_repeated_element(&child, clip_elem.clone());
                         // The width and the height must be null
-                        clip_elem.borrow_mut().bindings.remove("width");
-                        clip_elem.borrow_mut().bindings.remove("height");
+                        let d = NamedReference::new(&clip_elem, "dummy");
+                        clip_elem.borrow_mut().geometry_props.as_mut().unwrap().width = d.clone();
+                        clip_elem.borrow_mut().geometry_props.as_mut().unwrap().height = d;
                     }
                 } else if has_visible_binding(&child) {
                     let new_child = create_visibility_element(&child, &native_clip);
@@ -99,5 +100,5 @@ fn create_visibility_element(child: &ElementRc, native_clip: &Rc<NativeClass>) -
         .collect(),
         ..Default::default()
     };
-    Rc::new(RefCell::new(element))
+    Element::make_rc(element)
 }

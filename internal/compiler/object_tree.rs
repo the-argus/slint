@@ -18,10 +18,12 @@ use crate::parser::{syntax_nodes, SyntaxKind, SyntaxNode};
 use crate::typeloader::ImportedTypes;
 use crate::typeregister::TypeRegister;
 use itertools::Either;
+use once_cell::unsync::OnceCell;
 use std::cell::{Cell, RefCell};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Display;
+use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
 macro_rules! unwrap_or_continue {
@@ -179,14 +181,21 @@ impl Document {
                     || import.file.ends_with(".ttf")
                     || import.file.ends_with(".otf")
                 {
+                    let token_path = import.import_uri_token.source_file.path();
+                    let import_file_path = PathBuf::from(import.file.clone());
+                    let import_file_path = crate::pathutils::join(token_path, &import_file_path)
+                        .unwrap_or(import_file_path);
+
                     // Assume remote urls are valid, we need to load them at run-time (which we currently don't). For
                     // local paths we should try to verify the existence and let the developer know ASAP.
-                    if import.file.starts_with("http://")
-                        || import.file.starts_with("https://")
-                        || crate::fileaccess::load_file(std::path::Path::new(&import.file))
+                    if crate::pathutils::is_url(&import_file_path)
+                        || crate::fileaccess::load_file(std::path::Path::new(&import_file_path))
                             .is_some()
                     {
-                        Some((import.file, import.import_uri_token))
+                        Some((
+                            import_file_path.to_string_lossy().to_string(),
+                            import.import_uri_token,
+                        ))
                     } else {
                         diag.push_error(
                             format!("File \"{}\" not found", import.file),
@@ -432,8 +441,11 @@ pub enum PropertyVisibility {
     Input,
     Output,
     InOut,
+    /// for builtin properties that must be known at compile time and cannot be changed at runtime
+    Constexpr,
     /// For functions, not properties
     Public,
+    Protected,
 }
 
 impl Display for PropertyVisibility {
@@ -443,7 +455,9 @@ impl Display for PropertyVisibility {
             PropertyVisibility::Input => f.write_str("input"),
             PropertyVisibility::Output => f.write_str("output"),
             PropertyVisibility::InOut => f.write_str("input output"),
+            PropertyVisibility::Constexpr => f.write_str("constexpr"),
             PropertyVisibility::Public => f.write_str("public"),
+            PropertyVisibility::Protected => f.write_str("protected"),
         }
     }
 }
@@ -524,7 +538,7 @@ impl Clone for PropertyAnimation {
                 property_analysis: e.property_analysis.clone(),
                 enclosing_component: e.enclosing_component.clone(),
                 repeated: None,
-                node: e.node.clone(),
+                debug: e.debug.clone(),
                 ..Default::default()
             }))
         }
@@ -550,6 +564,25 @@ impl Clone for PropertyAnimation {
 /// Map the accessibility property (eg "accessible-role", "accessible-label") to its named reference
 #[derive(Default, Clone)]
 pub struct AccessibilityProps(pub BTreeMap<String, NamedReference>);
+
+#[derive(Clone, Debug)]
+pub struct GeometryProps {
+    pub x: NamedReference,
+    pub y: NamedReference,
+    pub width: NamedReference,
+    pub height: NamedReference,
+}
+
+impl GeometryProps {
+    pub fn new(element: &ElementRc) -> Self {
+        Self {
+            x: NamedReference::new(element, "x"),
+            y: NamedReference::new(element, "y"),
+            width: NamedReference::new(element, "width"),
+            height: NamedReference::new(element, "height"),
+        }
+    }
+}
 
 pub type BindingsMap = BTreeMap<String, RefCell<BindingExpression>>;
 
@@ -594,6 +627,10 @@ pub struct Element {
 
     pub accessibility_props: AccessibilityProps,
 
+    /// Reference to the property.
+    /// This is always initialized from the element constructor, but is Option because it references itself
+    pub geometry_props: Option<GeometryProps>,
+
     /// true if this Element is the fake Flickable viewport
     pub is_flickable_viewport: bool,
 
@@ -603,9 +640,9 @@ pub struct Element {
 
     /// This is the component-local index of this item in the item tree array.
     /// It is generated after the last pass and before the generators run.
-    pub item_index: once_cell::unsync::OnceCell<usize>,
+    pub item_index: OnceCell<u32>,
     /// the index of the first children in the tree, set with item_index
-    pub item_index_of_first_children: once_cell::unsync::OnceCell<usize>,
+    pub item_index_of_first_children: OnceCell<u32>,
 
     /// True when this element is in a component was declared with the `:=` symbol instead of the `component` keyword
     pub is_legacy_syntax: bool,
@@ -613,17 +650,23 @@ pub struct Element {
     /// How many times the element was inlined
     pub inline_depth: i32,
 
-    /// The AST node, if available
-    pub node: Option<syntax_nodes::Element>,
+    /// Debug information about this element.
+    ///
+    /// Contains the AST node if available, as well as wether this element was a layout that had
+    /// been lowered into a rectangle in the lower_layouts pass.
+    /// There can be several in case of inlining or optimization (child merged into their parent).
+    ///
+    /// The order in the list is first the parent, and then the removed children.
+    pub debug: Vec<(syntax_nodes::Element, Option<crate::layout::Layout>)>,
 }
 
 impl Spanned for Element {
     fn span(&self) -> crate::diagnostics::Span {
-        self.node.as_ref().map(|n| n.span()).unwrap_or_default()
+        self.debug.first().map(|n| n.0.span()).unwrap_or_default()
     }
 
     fn source_file(&self) -> Option<&crate::diagnostics::SourceFile> {
-        self.node.as_ref().map(|n| &n.source_file)
+        self.debug.first().map(|n| &n.0.source_file)
     }
 }
 
@@ -700,6 +743,10 @@ pub fn pretty_print(
         indent!();
         pretty_print(f, &c.borrow(), indentation)?
     }
+    for g in &e.geometry_props {
+        indent!();
+        writeln!(f, "geometry {:?} ", g)?;
+    }
 
     /*if let Type::Component(base) = &e.base_type {
         pretty_print(f, &c.borrow(), indentation)?
@@ -726,6 +773,9 @@ pub struct PropertyAnalysis {
 
     /// True if the property is linked to another property that is read only. That property becomes read-only
     pub is_linked_to_read_only: bool,
+
+    /// True if this property is linked to another property
+    pub is_linked: bool,
 }
 
 impl PropertyAnalysis {
@@ -778,8 +828,16 @@ pub struct RepeatedElementInfo {
 }
 
 pub type ElementRc = Rc<RefCell<Element>>;
+pub type ElementWeak = Weak<RefCell<Element>>;
 
 impl Element {
+    pub fn make_rc(self) -> ElementRc {
+        let r = ElementRc::new(RefCell::new(self));
+        let g = GeometryProps::new(&r);
+        r.borrow_mut().geometry_props = Some(g);
+        r
+    }
+
     pub fn from_node(
         node: syntax_nodes::Element,
         id: String,
@@ -842,7 +900,7 @@ impl Element {
         let mut r = Element {
             id,
             base_type,
-            node: Some(node.clone()),
+            debug: vec![(node.clone(), None)],
             is_legacy_syntax,
             ..Default::default()
         };
@@ -1099,7 +1157,13 @@ impl Element {
                 match token.as_token().unwrap().text() {
                     "pure" => pure = Some(true),
                     "public" => {
+                        debug_assert_eq!(visibility, PropertyVisibility::Private);
                         visibility = PropertyVisibility::Public;
+                        pure = pure.or(Some(false));
+                    }
+                    "protected" => {
+                        debug_assert_eq!(visibility, PropertyVisibility::Private);
+                        visibility = PropertyVisibility::Protected;
                         pure = pure.or(Some(false));
                     }
                     _ => (),
@@ -1220,7 +1284,7 @@ impl Element {
         }
 
         let mut children_placeholder = None;
-        let r = ElementRc::new(RefCell::new(r));
+        let r = r.make_rc();
 
         for se in node.children() {
             if se.kind() == SyntaxKind::SubElement {
@@ -1447,6 +1511,7 @@ impl Element {
         self.property_declarations.get(name).map_or_else(
             || {
                 let mut r = self.base_type.lookup_property(name);
+                r.is_in_direct_base = r.is_local_to_component;
                 r.is_local_to_component = false;
                 r
             },
@@ -1456,13 +1521,9 @@ impl Element {
                 property_visibility: p.visibility,
                 declared_pure: p.pure,
                 is_local_to_component: true,
+                is_in_direct_base: false,
             },
         )
-    }
-
-    /// Return the Span of this element in the AST for error reporting
-    pub fn span(&self) -> crate::diagnostics::Span {
-        self.node.as_ref().map(|n| n.span()).unwrap_or_default()
     }
 
     fn parse_bindings(
@@ -1573,9 +1634,9 @@ impl Element {
 
     /// Returns the element's name as specified in the markup, not normalized.
     pub fn original_name(&self) -> String {
-        self.node
-            .as_ref()
-            .and_then(|n| n.child_token(parser::SyntaxKind::Identifier))
+        self.debug
+            .first()
+            .and_then(|n| n.0.child_token(parser::SyntaxKind::Identifier))
             .map(|n| n.to_string())
             .unwrap_or_else(|| self.id.clone())
     }
@@ -1719,7 +1780,7 @@ fn animation_element_from_node(
         None
     } else {
         let mut anim_element =
-            Element { id: "".into(), base_type: anim_type, node: None, ..Default::default() };
+            Element { id: "".into(), base_type: anim_type, ..Default::default() };
         anim_element.parse_bindings(
             anim.Binding().filter_map(|b| {
                 Some((b.child_token(SyntaxKind::Identifier)?, b.BindingExpression().into()))
@@ -1870,7 +1931,7 @@ pub fn recurse_elem<State>(
     }
 }
 
-/// Same as [`recurse_elem`] but include the elements form sub_components
+/// Same as [`recurse_elem`] but include the elements from sub_components
 pub fn recurse_elem_including_sub_components<State>(
     component: &Component,
     state: &State,
@@ -1975,11 +2036,14 @@ pub fn visit_element_expressions(
         }
     }
 
-    let repeated = std::mem::take(&mut elem.borrow_mut().repeated);
-    if let Some(mut r) = repeated {
-        let is_conditional_element = r.is_conditional_element;
-        vis(&mut r.model, None, &|| if is_conditional_element { Type::Bool } else { Type::Model });
-        elem.borrow_mut().repeated = Some(r)
+    let repeated = elem
+        .borrow_mut()
+        .repeated
+        .as_mut()
+        .map(|r| (std::mem::take(&mut r.model), r.is_conditional_element));
+    if let Some((mut model, is_cond)) = repeated {
+        vis(&mut model, None, &|| if is_cond { Type::Bool } else { Type::Model });
+        elem.borrow_mut().repeated.as_mut().unwrap().model = model;
     }
     visit_element_expressions_simple(elem, &mut vis);
     let mut states = std::mem::take(&mut elem.borrow_mut().states);
@@ -2074,10 +2138,24 @@ pub fn visit_all_named_references_in_element(
     let mut layout_info_prop = std::mem::take(&mut elem.borrow_mut().layout_info_prop);
     layout_info_prop.as_mut().map(|(h, b)| (vis(h), vis(b)));
     elem.borrow_mut().layout_info_prop = layout_info_prop;
+    let mut debug = std::mem::take(&mut elem.borrow_mut().debug);
+    for d in debug.iter_mut() {
+        d.1.as_mut().map(|l| l.visit_named_references(&mut vis));
+    }
+    elem.borrow_mut().debug = debug;
 
     let mut accessibility_props = std::mem::take(&mut elem.borrow_mut().accessibility_props);
     accessibility_props.0.iter_mut().for_each(|(_, x)| vis(x));
     elem.borrow_mut().accessibility_props = accessibility_props;
+
+    let geometry_props = elem.borrow_mut().geometry_props.take();
+    if let Some(mut geometry_props) = geometry_props {
+        vis(&mut geometry_props.x);
+        vis(&mut geometry_props.y);
+        vis(&mut geometry_props.width);
+        vis(&mut geometry_props.height);
+        elem.borrow_mut().geometry_props = Some(geometry_props);
+    }
 
     // visit two way bindings
     for expr in elem.borrow().bindings.values() {
@@ -2482,32 +2560,20 @@ pub fn inject_element_as_repeated_element(repeated_element: &ElementRc, new_root
 /// Make the geometry of the `injected_parent` that of the old_elem. And the old_elem
 /// will cover the `injected_parent`
 pub fn adjust_geometry_for_injected_parent(injected_parent: &ElementRc, old_elem: &ElementRc) {
-    // The values for properties that affect the geometry may be supplied in two different ways:
-    //
-    //   * When coming from the outside, for example by the repeater being inside a layout, we need
-    //     the values to apply to the new root element and the old root just needs to follow.
-    //   * When coming from the inside, for example when the repeater just creates rectangles that
-    //     calculate their own position, we need to move those bindings as well to the new root.
-    injected_parent.borrow_mut().bindings.extend(Iterator::chain(
-        ["x", "y", "z"].iter().filter_map(|x| old_elem.borrow_mut().bindings.remove_entry(*x)),
-        ["width", "height"].iter().map(|x| {
-            (
-                x.to_string(),
-                BindingExpression::from(Expression::PropertyReference(NamedReference::new(
-                    old_elem, x,
-                )))
-                .into(),
-            )
-        }),
-    ));
-    injected_parent.borrow().property_analysis.borrow_mut().extend(
-        ["x", "y", "z"].into_iter().filter_map(|x| {
-            old_elem
-                .borrow()
-                .property_analysis
-                .borrow()
-                .get_key_value(x)
-                .map(|(k, v)| (k.clone(), v.clone()))
-        }),
+    let mut injected_parent_mut = injected_parent.borrow_mut();
+    injected_parent_mut.bindings.insert(
+        "z".into(),
+        RefCell::new(BindingExpression::new_two_way(NamedReference::new(old_elem, "z".into()))),
     );
+    // (should be removed by const propagation in the llr)
+    injected_parent_mut.property_declarations.insert(
+        "dummy".into(),
+        PropertyDeclaration { property_type: Type::LogicalLength, ..Default::default() },
+    );
+    let mut old_elem_mut = old_elem.borrow_mut();
+    injected_parent_mut.default_fill_parent = std::mem::take(&mut old_elem_mut.default_fill_parent);
+    injected_parent_mut.geometry_props = old_elem_mut.geometry_props.clone();
+    drop(injected_parent_mut);
+    old_elem_mut.geometry_props.as_mut().unwrap().x = NamedReference::new(injected_parent, "dummy");
+    old_elem_mut.geometry_props.as_mut().unwrap().y = NamedReference::new(injected_parent, "dummy");
 }

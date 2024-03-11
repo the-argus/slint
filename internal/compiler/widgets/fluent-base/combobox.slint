@@ -1,54 +1,59 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-import { Typography, Palette, Icons } from "styling.slint";
+import { FluentFontSettings, FluentPalette, Icons } from "styling.slint";
 import { MenuBorder, ListItem, FocusBorder } from "components.slint";
+import { ComboBoxBase } from "../common/combobox-base.slint";
 
 export component ComboBox {
-    callback selected(string /* current-value */);
+    in property <[string]> model <=> i-base.model;
+    in property <bool> enabled <=> i-base.enabled;
+    out property <bool> has-focus <=> i-base.has-focus;
+    in-out property <int> current-index <=> i-base.current-index;
+    in-out property <string> current-value <=> i-base.current-value;
 
-    in property <[string]> model;
-    in property <bool> enabled <=> i-focus-scope.enabled;
-    out property <bool> has-focus <=> i-focus-scope.has-focus;
-    in-out property <int> current-index: 0;
-    in-out property <string> current-value: root.model[root.current-index];
+    callback selected <=> i-base.selected;
 
     min-width: max(160px, i-layout.min-height);
     min-height: max(32px, i-layout.min-height);
     horizontal-stretch: 1;
     vertical-stretch: 0;
-    forward-focus: i-focus-scope;
+    forward-focus: i-base;
 
-    i-focus-scope := FocusScope {
-        key-pressed(event) => {
-            if (event.text == Key.UpArrow) {
-                root.move-selection-up();
-                return accept;
-            } else if (event.text == Key.DownArrow) {
-
-                root.move-selection-down();
-                return accept;
-            } else if (event.text == Key.Return) {
-                i-popup.show();
-            }
-            return reject;
+    states [
+        disabled when !root.enabled : {
+            i-background.background: FluentPalette.control-disabled;
+            i-background.border-color: FluentPalette.border;
+            i-text.color: FluentPalette.text-disabled;
+            i-icon.colorize: FluentPalette.text-disabled;
         }
+        pressed when i-base.pressed : {
+            i-background.background: FluentPalette.control-alt-tertiary;
+            i-background.border-color: FluentPalette.border;
+            i-text.color: FluentPalette.text-secondary;
+            i-icon.colorize: FluentPalette.text-tertiary;
+        }
+        hover when i-base.has-hover : {
+            i-background.background: FluentPalette.control-secondary;
+        }
+    ]
 
-        i-touch-area := TouchArea {
-            enabled <=> root.enabled;
+    i-base := ComboBoxBase {
+        width: 100%;
+        height: 100%;
 
-            clicked => {
-                root.focus();
-                i-popup.show();
-            }
+        show-popup => {
+            i-popup.show();
         }
     }
 
     i-background := Rectangle {
         border-radius: 3px;
-        background: Palette.control-default;
+        background: FluentPalette.control-background;
         border-width: 1px;
-        border-color: Palette.control-border;
+        border-color: FluentPalette.control-border;
+
+        animate border-color { duration: 200ms; }
 
         i-layout := HorizontalLayout {
             padding-left: 11px;
@@ -58,14 +63,14 @@ export component ComboBox {
             i-text := Text {
                 horizontal-alignment: left;
                 vertical-alignment: center;
-                font-size: Typography.body.font-size;
-                font-weight: Typography.body.font-weight;
-                color: Palette.text-primary;
+                font-size: FluentFontSettings.body.font-size;
+                font-weight: FluentFontSettings.body.font-weight;
+                color: FluentPalette.control-foreground;
                 text: root.current-value;
             }
 
             i-icon := Image {
-                colorize: Palette.text-secondary;
+                colorize: FluentPalette.text-secondary;
                 width: 12px;
                 source: Icons.dropdown;
                 y: 2px;
@@ -73,8 +78,6 @@ export component ComboBox {
                 animate colorize { duration: 150ms; }
             }
         }
-
-        animate border-color { duration: 200ms; }
     }
 
     // focus border
@@ -84,7 +87,9 @@ export component ComboBox {
 
     i-popup := PopupWindow {
         x: 0;
-        y: -46px;
+        // Position the popup so that the first element is over the popup.
+        // Ideally it should be so that the current element is over the popup.
+        y: -4px;
         width: root.width;
 
         MenuBorder {
@@ -92,46 +97,18 @@ export component ComboBox {
                 padding: 4px;
 
                 for value[index] in root.model : ListItem {
-                    text: value;
-                    selected: index == root.current-index;
+                    item: { text: value };
+                    is-selected: index == root.current-index;
+                    has-hover: i-touch-area.has-hover;
+                    pressed: i-touch-area.pressed;
 
-                    clicked => {
-                        root.select(index);
+                    i-touch-area := TouchArea {
+                        clicked => {
+                            i-base.select(index);
+                        }
                     }
                 }
             }
         }
     }
-
-    function select(index: int) {
-        root.current-index = index;
-        root.current-value = root.model[root.current-index];
-        root.selected(root.current-value);
-    }
-
-    function move-selection-up() {
-        root.select(Math.max(root.current-index - 1, 0));
-    }
-
-    function move-selection-down() {
-        root.select(Math.min(root.current-index + 1, root.model.length - 1));
-    }
-
-    states [
-        disabled when !root.enabled : {
-            i-background.background: Palette.control-disabled;
-            i-background.border-color: Palette.control-stroke;
-            i-text.color: Palette.text-disabled;
-            i-icon.colorize: Palette.text-disabled;
-        }
-        pressed when i-touch-area.pressed : {
-            i-background.background: Palette.control-alt-tertiary;
-            i-background.border-color: Palette.control-stroke;
-            i-text.color: Palette.text-secondary;
-            i-icon.colorize: Palette.text-tertiary;
-        }
-        hover when i-touch-area.has-hover : {
-            i-background.background: Palette.control-secondary;
-        }
-    ]
 }

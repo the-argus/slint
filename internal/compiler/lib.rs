@@ -12,6 +12,7 @@ extern crate proc_macro;
 use core::future::Future;
 use core::pin::Pin;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 pub mod builtin_macros;
@@ -30,10 +31,13 @@ pub mod lookup;
 pub mod namedreference;
 pub mod object_tree;
 pub mod parser;
+pub mod pathutils;
 pub mod typeloader;
 pub mod typeregister;
 
 pub mod passes;
+
+use std::path::Path;
 
 /// Specify how the resources are embedded by the compiler
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +59,8 @@ pub struct CompilerConfiguration {
     pub embed_resources: EmbedResourcesKind,
     /// The compiler will look in these paths for components used in the file to compile.
     pub include_paths: Vec<std::path::PathBuf>,
+    /// The compiler will look in these paths for library imports.
+    pub library_paths: HashMap<String, std::path::PathBuf>,
     /// the name of the style. (eg: "native")
     pub style: Option<String>,
 
@@ -65,6 +71,11 @@ pub struct CompilerConfiguration {
     pub open_import_fallback: Option<
         Rc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Option<std::io::Result<String>>>>>>,
     >,
+    /// Callback to map URLs for resources
+    ///
+    /// The function takes the url and returns the mapped URL (or None if not mapped)
+    pub resource_url_mapper:
+        Option<Rc<dyn Fn(&str) -> Pin<Box<dyn Future<Output = Option<String>>>>>>,
 
     /// Run the pass that inlines all the elements.
     ///
@@ -83,6 +94,9 @@ pub struct CompilerConfiguration {
 
     /// The domain used as one of the parameter to the translate function
     pub translation_domain: Option<String>,
+
+    /// C++ namespace
+    pub cpp_namespace: Option<String>,
 }
 
 impl CompilerConfiguration {
@@ -131,25 +145,39 @@ impl CompilerConfiguration {
 
         let enable_component_containers = enable_experimental_features;
 
+        let cpp_namespace = match output_format {
+            #[cfg(feature = "cpp")]
+            crate::generator::OutputFormat::Cpp(config) => match config.namespace {
+                Some(namespace) => Some(namespace),
+                None => match std::env::var("SLINT_CPP_NAMESPACE") {
+                    Ok(namespace) => Some(namespace),
+                    Err(_) => None,
+                },
+            },
+            _ => None,
+        };
+
         Self {
             embed_resources,
             include_paths: Default::default(),
+            library_paths: Default::default(),
             style: Default::default(),
-            open_import_fallback: Default::default(),
+            open_import_fallback: None,
+            resource_url_mapper: None,
             inline_all_elements,
             scale_factor,
             accessibility: true,
             enable_component_containers,
             translation_domain: None,
+            cpp_namespace,
         }
     }
 }
 
-pub async fn compile_syntax_node(
-    doc_node: parser::SyntaxNode,
-    mut diagnostics: diagnostics::BuildDiagnostics,
+fn prepare_for_compile(
+    diagnostics: &mut diagnostics::BuildDiagnostics,
     #[allow(unused_mut)] mut compiler_config: CompilerConfiguration,
-) -> (object_tree::Document, diagnostics::BuildDiagnostics) {
+) -> typeloader::TypeLoader {
     #[cfg(feature = "software-renderer")]
     if compiler_config.embed_resources == EmbedResourcesKind::EmbedTextures {
         // HACK: disable accessibility when compiling for the software renderer
@@ -163,21 +191,24 @@ pub async fn compile_syntax_node(
         crate::typeregister::TypeRegister::builtin()
     };
 
-    let type_registry =
-        Rc::new(RefCell::new(typeregister::TypeRegister::new(&global_type_registry)));
+    typeloader::TypeLoader::new(global_type_registry, compiler_config, diagnostics)
+}
+
+pub async fn compile_syntax_node(
+    doc_node: parser::SyntaxNode,
+    mut diagnostics: diagnostics::BuildDiagnostics,
+    #[allow(unused_mut)] mut compiler_config: CompilerConfiguration,
+) -> (object_tree::Document, diagnostics::BuildDiagnostics, typeloader::TypeLoader) {
+    let mut loader = prepare_for_compile(&mut diagnostics, compiler_config);
+
+    if diagnostics.has_error() {
+        return (crate::object_tree::Document::default(), diagnostics, loader);
+    }
 
     let doc_node: parser::syntax_nodes::Document = doc_node.into();
 
-    let mut loader = typeloader::TypeLoader::new(
-        global_type_registry,
-        compiler_config.clone(),
-        &mut diagnostics,
-    );
-
-    if diagnostics.has_error() {
-        return (crate::object_tree::Document::default(), diagnostics);
-    }
-
+    let type_registry =
+        Rc::new(RefCell::new(typeregister::TypeRegister::new(&loader.global_type_registry)));
     let (foreign_imports, reexports) =
         loader.load_dependencies_recursively(&doc_node, &mut diagnostics, &type_registry).await;
 
@@ -195,13 +226,29 @@ pub async fn compile_syntax_node(
     }
 
     if !diagnostics.has_error() {
-        passes::run_passes(&doc, &mut diagnostics, &mut loader, &compiler_config).await;
+        passes::run_passes(&doc, &mut loader, &mut diagnostics).await;
     } else {
         // Don't run all the passes in case of errors because because some invariants are not met.
-        passes::run_import_passes(&doc, &mut loader, &mut diagnostics);
+        passes::run_import_passes(&doc, &loader, &mut diagnostics);
     }
 
     diagnostics.all_loaded_files = loader.all_files().cloned().collect();
 
-    (doc, diagnostics)
+    (doc, diagnostics, loader)
+}
+
+pub async fn load_root_file(
+    path: &Path,
+    version: diagnostics::SourceFileVersion,
+    source_path: &Path,
+    source_code: String,
+    mut diagnostics: diagnostics::BuildDiagnostics,
+    #[allow(unused_mut)] mut compiler_config: CompilerConfiguration,
+) -> (std::path::PathBuf, diagnostics::BuildDiagnostics, typeloader::TypeLoader) {
+    let mut loader = prepare_for_compile(&mut diagnostics, compiler_config);
+
+    let path =
+        loader.load_root_file(path, version, source_path, source_code, &mut diagnostics).await;
+
+    (path, diagnostics, loader)
 }

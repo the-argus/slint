@@ -24,10 +24,15 @@ pub extern "C" fn slint_mock_elapsed_time(time_in_ms: u64) {
     crate::timers::TimerList::maybe_activate_timers(tick);
 }
 
+/// Return the current mocked time.
+#[no_mangle]
+pub extern "C" fn slint_get_mocked_time() -> u64 {
+    crate::animations::CURRENT_ANIMATION_DRIVER.with(|driver| driver.current_tick()).as_millis()
+}
+
 /// Simulate a click on a position within the component.
 #[no_mangle]
 pub extern "C" fn slint_send_mouse_click(
-    _component: &crate::component::ComponentRc,
     x: f32,
     y: f32,
     window_adapter: &crate::window::WindowAdapterRc,
@@ -85,8 +90,8 @@ pub extern "C" fn send_keyboard_string_sequence(
 /// implementation details for debug_log()
 #[doc(hidden)]
 pub fn debug_log_impl(args: core::fmt::Arguments) {
-    crate::platform::PLATFORM_INSTANCE.with(|p| match p.get() {
-        Some(platform) => platform.debug_log(args),
+    crate::context::GLOBAL_CONTEXT.with(|p| match p.get() {
+        Some(ctx) => ctx.0.platform.debug_log(args),
         None => default_debug_log(args),
     });
 }

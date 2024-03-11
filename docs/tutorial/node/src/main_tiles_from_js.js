@@ -3,8 +3,8 @@
 
 // ANCHOR: main
 // main.js
-let slint = require("slint-ui");
-let ui = require("./memory.slint");
+import * as slint from "slint-ui";
+let ui = slint.loadFile("./ui/appwindow.slint");
 let mainWindow = new ui.MainWindow();
 
 let initial_tiles = mainWindow.memory_tiles;
@@ -18,6 +18,6 @@ for (let i = tiles.length - 1; i > 0; i--) {
 let model = new slint.ArrayModel(tiles);
 mainWindow.memory_tiles = model;
 
-mainWindow.run();
+await mainWindow.run();
 
 // ANCHOR_END: main

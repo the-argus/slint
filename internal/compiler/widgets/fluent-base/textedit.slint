@@ -1,12 +1,10 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-import { Typography, Palette } from "styling.slint";
+import { FluentFontSettings, FluentPalette } from "styling.slint";
 import { ScrollView } from "scrollview.slint";
 
 export component TextEdit {
-    callback edited(string /* text */);
-
     in property <TextWrap> wrap <=> i-text-input.wrap;
     in property <TextHorizontalAlignment> horizontal-alignment <=> i-text-input.horizontal-alignment;
     in property <bool> read-only <=> i-text-input.read-only;
@@ -21,17 +19,57 @@ export component TextEdit {
     in-out property <length> viewport-width <=> i-scroll-view.viewport-width;
     in-out property <length> viewport-height <=> i-scroll-view.viewport-height;
 
+    callback edited(/* text */ string);
+
+    public function set-selection-offsets(start: int, end: int) {
+        i-text-input.set-selection-offsets(start, end);
+    }
+
+    public function select-all() {
+        i-text-input.select-all();
+    }
+
+    public function clear-selection() {
+        i-text-input.clear-selection();
+    }
+
+    public function cut() {
+        i-text-input.cut();
+    }
+
+    public function copy() {
+        i-text-input.copy();
+    }
+
+    public function paste() {
+        i-text-input.paste();
+    }
+
     forward-focus: i-text-input;
     horizontal-stretch: 1;
     vertical-stretch: 1;
+
+    states [
+        disabled when !root.enabled : {
+            i-background.background: FluentPalette.control-disabled;
+            i-background.border-color: FluentPalette.border;
+            i-text-input.color: FluentPalette.text-disabled;
+            i-text-input.selection-foreground-color: FluentPalette.text-accent-foreground-disabled;
+        }
+        focused when root.has-focus : {
+            i-background.background: FluentPalette.control-input-active;
+            i-background.border-color: FluentPalette.border;
+            i-focus-border.background: FluentPalette.accent-background;
+        }
+    ]
 
     i-background := Rectangle {
         width: 100%;
         height: 100%;
         border-radius: 4px;
-        background: Palette.control-default;
+        background: FluentPalette.control-background;
         border-width: 1px;
-        border-color: Palette.text-control-border;
+        border-color: FluentPalette.text-control-border;
 
         i-scroll-view := ScrollView {
             x: 12px;
@@ -43,11 +81,11 @@ export component TextEdit {
 
             i-text-input := TextInput {
                 enabled: true;
-                color: Palette.text-primary;
-                font-size: Typography.body.font-size;
-                font-weight: Typography.body.font-weight;
-                selection-background-color: Palette.accent-selected-text;
-                selection-foreground-color: self.color;
+                color: FluentPalette.foreground;
+                font-size: FluentFontSettings.body.font-size;
+                font-weight: FluentFontSettings.body.font-weight;
+                selection-background-color: FluentPalette.selection-background;
+                selection-foreground-color: FluentPalette.accent-foreground;
                 single-line: false;
                 wrap: word-wrap;
 
@@ -78,37 +116,4 @@ export component TextEdit {
             height: 2px;
         }
     }
-
-    public function select-all() {
-        i-text-input.select-all();
-    }
-
-    public function clear-selection() {
-        i-text-input.clear-selection();
-    }
-
-    public function cut() {
-        i-text-input.cut();
-    }
-
-    public function copy() {
-        i-text-input.copy();
-    }
-
-    public function paste() {
-        i-text-input.paste();
-    }
-
-    states [
-        disabled when !root.enabled : {
-            i-background.background: Palette.control-disabled;
-            i-background.border-color: Palette.control-stroke;
-            i-text-input.color: Palette.text-disabled;
-        }
-        focused when root.has-focus : {
-            i-background.background: Palette.control-input-active;
-            i-background.border-color: Palette.control-stroke;
-            i-focus-border.background: Palette.accent-default;
-        }
-    ]
 }

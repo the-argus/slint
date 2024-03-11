@@ -3,7 +3,7 @@
 
 //! This module contains all enums exposed in the .slint language.
 
-// cSpell: ignore combobox evenodd grabbable horizontalbox horizontallayout nesw spinbox standardbutton standardtableview verticalbox verticallayout
+// cSpell: ignore evenodd grabbable horizontalbox horizontallayout nesw standardbutton standardtableview verticalbox verticallayout
 
 /// Call a macro with every enum exposed in the .slint language
 ///
@@ -73,7 +73,7 @@ macro_rules! for_each_enums {
             }
 
             /// Use this enum to add standard buttons to a [`Dialog`](elements.md#dialog). The look and positioning
-            /// of these [`StandardButton`](widgets.md#standardbutton)s depends on the environment
+            /// of these [`StandardButton`](../widgets/standardbutton.md)s depends on the environment
             /// (OS, UI environment, etc.) the application runs in.
             enum StandardButtonKind {
                 /// A "OK" button that accepts a [`Dialog`](elements.md#dialog), closing it when clicked.
@@ -129,6 +129,8 @@ macro_rules! for_each_enums {
                 Down,
                 /// The button was released.
                 Up,
+                /// The pointer has moved,
+                Move,
             }
 
             /// This enum describes the different types of buttons for a pointer event,
@@ -222,8 +224,33 @@ macro_rules! for_each_enums {
                 Fill,
                 /// The source image is scaled to fit into the [`Image`](elements.md#image) element's dimension while preserving the aspect ratio.
                 Contain,
-                /// The source image is scaled to cover into the [`Image`](elements.md#image) element's dimension while preserving the aspect ratio. If the aspect ratio of the source image doesn't match the element's one, then the image will be clipped to fit.
+                /// The source image is scaled to cover into the [`Image`](elements.md#image) element's dimension while preserving the aspect ratio.
+                /// If the aspect ratio of the source image doesn't match the element's one, then the image will be clipped to fit.
                 Cover,
+                /// Preserves the size of the source image in logical pixels.
+                /// The source image will still be scaled by the scale factor that applies to all elements in the window.
+                /// Any extra space will be left blank.
+                Preserve,
+            }
+
+            /// This enum specifies the horizontal alignment of the source image.
+            enum ImageHorizontalAlignment {
+                /// Aligns the source image at the center of the [`Image`](elements.md#image) element.
+                Center,
+                /// Aligns the source image at the left of the [`Image`](elements.md#image) element.
+                Left,
+                /// Aligns the source image at the right of the [`Image`](elements.md#image) element.
+                Right,
+            }
+
+            /// This enum specifies the vertical alignment of the source image.
+            enum ImageVerticalAlignment {
+                /// Aligns the source image at the center of the [`Image`](elements.md#image) element.
+                Center,
+                /// Aligns the source image at the top of the [`Image`](elements.md#image) element.
+                Top,
+                /// Aligns the source image at the bottom of the [`Image`](elements.md#image) element.
+                Bottom,
             }
 
             /// This enum specifies how the source image will be scaled.
@@ -234,19 +261,31 @@ macro_rules! for_each_enums {
                 Pixelated,
             }
 
-            /// This enum is used to define the type of the input field. Currently this only differentiates between
-            /// text and password inputs but in the future it could be expanded to also define what type of virtual keyboard
-            /// should be shown, for example.
+            /// This enum specifies how the source image will be tiled.
+            enum ImageTiling {
+                /// The source image will not be tiled.
+                None,
+                /// The source image will be repeated to fill the [`Image`](elements.md#image) element.
+                Repeat,
+                /// The source image will be repeated and scaled to fill the [`Image`](elements.md#image) element, ensuring an integer number of repetitions.
+                Round,
+            }
+
+            /// This enum is used to define the type of the input field.
             #[non_exhaustive]
             enum InputType {
                 /// The default value. This will render all characters normally
                 Text,
                 /// This will render all characters with a character that defaults to "*"
                 Password,
+                /// This will only accept and render number characters (0-9)
+                Number,
+                /// This will accept and render characters if it's valid part of a decimal
+                Decimal,
             }
 
             /// Enum representing the [alignment](../concepts/layouting.md#alignment) property of a
-            /// [`HorizontalBox`](widgets.md#horizontalbox), a [`VerticalBox`](widgets.md#verticalbox),
+            /// [`HorizontalBox`](../widgets/horizontalbox.md), a [`VerticalBox`](../widgets/verticalbox.md),
             /// a [`HorizontalLayout`, or `VerticalLayout`](elements.md#verticallayout-and-horizontallayout).
             enum LayoutAlignment {
                 /// Use the minimum size of all elements in a layout, distribute remaining space
@@ -290,24 +329,26 @@ macro_rules! for_each_enums {
             enum AccessibleRole {
                 /// The element isn't accessible.
                 None,
-                /// The element is a [`Button`](widgets.md#button) or behaves like one.
+                /// The element is a [`Button`](../widgets/button.md) or behaves like one.
                 Button,
-                /// The element is a [`CheckBox`](widgets.md#checkbox) or behaves like one.
+                /// The element is a [`CheckBox`](../widgets/checkbox.md) or behaves like one.
                 Checkbox,
-                /// The element is a [`ComboBox`](widgets.md#combobox) or behaves like one.
+                /// The element is a [`ComboBox`](../widgets/combobox.md) or behaves like one.
                 Combobox,
-                /// The element is a [`Slider`](widgets.md#slider) or behaves like one.
+                /// The element is a [`Slider`](../widgets/slider.md) or behaves like one.
                 Slider,
-                /// The element is a [`SpinBox`](widgets.md#spinbox) or behaves like one.
+                /// The element is a [`SpinBox`](../widgets/spinbox.md) or behaves like one.
                 Spinbox,
-                /// The element is a [`Tab`](widgets.md#tabwidget) or behaves like one.
+                /// The element is a [`Tab`](../widgets/tabwidget.md) or behaves like one.
                 Tab,
                 /// The role for a [`Text`](elements.md#text) element. It's automatically applied.
                 Text,
+                /// The element is a [`ProgressIndicator`](../widgets/progressindicator.md) or behaves like one.
+                ProgressIndicator,
             }
 
             /// This enum represents the different values of the `sort-order` property.
-            /// It's used to sort a [`StandardTableView`](widgets.md#standardtableview) by a column.
+            /// It's used to sort a [`StandardTableView`](../widgets/standardtableview.md) by a column.
             enum SortOrder {
                 /// The column is unsorted.
                 Unsorted,
@@ -317,6 +358,14 @@ macro_rules! for_each_enums {
 
                 /// The column is sorted in descending order.
                 Descending,
+            }
+
+            /// Represents the orientation of an element or widget such as the [`Slider`](../widgets/slider.md).
+            enum Orientation {
+                /// Element is oriented horizontally.
+                Horizontal,
+                /// Element is oriented vertically.
+                Vertical,
             }
         ];
     };

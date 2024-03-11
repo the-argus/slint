@@ -3,6 +3,7 @@
 
 mod apply_default_properties_from_style;
 mod binding_analysis;
+mod border_radius;
 mod check_expressions;
 mod check_public_api;
 mod check_rotation;
@@ -21,7 +22,7 @@ mod embed_glyphs;
 mod embed_images;
 mod ensure_window;
 mod flickable;
-mod focus_item;
+mod focus_handling;
 pub mod generate_item_indices;
 pub mod infer_aliases_types;
 mod inlining;
@@ -35,11 +36,12 @@ mod lower_shadows;
 mod lower_states;
 mod lower_tabwidget;
 mod lower_text_input_interface;
-mod materialize_fake_properties;
-mod move_declarations;
+pub mod materialize_fake_properties;
+pub mod move_declarations;
 mod optimize_useless_rectangles;
 mod purity_check;
 mod remove_aliases;
+mod remove_return;
 mod remove_unused_properties;
 mod repeater_component;
 pub mod resolve_native_classes;
@@ -51,13 +53,11 @@ mod z_order;
 use crate::expression_tree::Expression;
 use crate::langtype::ElementType;
 use crate::namedreference::NamedReference;
-use std::rc::Rc;
 
 pub async fn run_passes(
     doc: &crate::object_tree::Document,
-    diag: &mut crate::diagnostics::BuildDiagnostics,
     type_loader: &mut crate::typeloader::TypeLoader,
-    compiler_config: &crate::CompilerConfiguration,
+    diag: &mut crate::diagnostics::BuildDiagnostics,
 ) {
     if matches!(
         doc.root_component.root_element.borrow().base_type,
@@ -85,7 +85,12 @@ pub async fn run_passes(
     for component in (root_component.used_types.borrow().sub_components.iter())
         .chain(std::iter::once(root_component))
     {
-        compile_paths::compile_paths(component, &doc.local_registry, diag);
+        compile_paths::compile_paths(
+            component,
+            &doc.local_registry,
+            type_loader.compiler_config.embed_resources,
+            diag,
+        );
         lower_tabwidget::lower_tabwidget(component, type_loader, diag).await;
         apply_default_properties_from_style::apply_default_properties_from_style(
             component,
@@ -99,21 +104,14 @@ pub async fn run_passes(
     inlining::inline(doc, inlining::InlineSelection::InlineOnlyRequiredComponents);
     collect_subcomponents::collect_subcomponents(root_component);
 
-    for component in (root_component.used_types.borrow().sub_components.iter())
-        .chain(std::iter::once(root_component))
-    {
-        focus_item::resolve_element_reference_in_set_focus_calls(component, diag);
-        if Rc::ptr_eq(component, root_component) {
-            focus_item::determine_initial_focus_item(component, diag);
-        }
-        focus_item::erase_forward_focus_properties(component);
-    }
+    focus_handling::call_focus_on_init(root_component);
 
     ensure_window::ensure_window(root_component, &doc.local_registry, &style_metrics);
 
     for component in (root_component.used_types.borrow().sub_components.iter())
         .chain(std::iter::once(root_component))
     {
+        border_radius::handle_border_radius(component, diag);
         flickable::handle_flickable(component, &global_type_registry.borrow());
         repeater_component::process_repeater_components(component);
         lower_popups::lower_popups(component, &doc.local_registry, diag);
@@ -168,15 +166,16 @@ pub async fn run_passes(
             diag,
         );
         clip::handle_clip(component, &global_type_registry.borrow(), diag);
-        if compiler_config.accessibility {
+        if type_loader.compiler_config.accessibility {
             lower_accessibility::lower_accessibility_properties(component, diag);
         }
         collect_init_code::collect_init_code(component);
         materialize_fake_properties::materialize_fake_properties(component);
     }
+    lower_layout::check_window_layout(root_component);
     collect_globals::collect_globals(doc, diag);
 
-    if compiler_config.inline_all_elements {
+    if type_loader.compiler_config.inline_all_elements {
         inlining::inline(doc, inlining::InlineSelection::InlineAllComponents);
         root_component.used_types.borrow_mut().sub_components.clear();
     }
@@ -216,26 +215,31 @@ pub async fn run_passes(
     // collect globals once more: After optimizations we might have less globals
     collect_globals::collect_globals(doc, diag);
 
+    remove_return::remove_return(doc);
+
     embed_images::embed_images(
         root_component,
-        compiler_config.embed_resources,
-        compiler_config.scale_factor,
+        type_loader.compiler_config.embed_resources,
+        type_loader.compiler_config.scale_factor,
+        &type_loader.compiler_config.resource_url_mapper,
         diag,
-    );
+    )
+    .await;
 
-    match compiler_config.embed_resources {
+    match type_loader.compiler_config.embed_resources {
         #[cfg(feature = "software-renderer")]
         crate::EmbedResourcesKind::EmbedTextures => {
             let mut characters_seen = std::collections::HashSet::new();
 
             // Include at least the default font sizes used in the MCU backend
-            let mut font_pixel_sizes = vec![(12. * compiler_config.scale_factor) as i16];
+            let mut font_pixel_sizes =
+                vec![(12. * type_loader.compiler_config.scale_factor) as i16];
             for component in (root_component.used_types.borrow().sub_components.iter())
                 .chain(std::iter::once(root_component))
             {
                 embed_glyphs::collect_font_sizes_used(
                     component,
-                    compiler_config.scale_factor,
+                    type_loader.compiler_config.scale_factor,
                     &mut font_pixel_sizes,
                 );
                 embed_glyphs::scan_string_literals(component, &mut characters_seen);
@@ -243,7 +247,7 @@ pub async fn run_passes(
 
             embed_glyphs::embed_glyphs(
                 root_component,
-                compiler_config.scale_factor,
+                type_loader.compiler_config.scale_factor,
                 font_pixel_sizes,
                 characters_seen,
                 std::iter::once(doc).chain(type_loader.all_documents()),
@@ -255,7 +259,8 @@ pub async fn run_passes(
             collect_custom_fonts::collect_custom_fonts(
                 root_component,
                 std::iter::once(doc).chain(type_loader.all_documents()),
-                compiler_config.embed_resources == crate::EmbedResourcesKind::EmbedAllResources,
+                type_loader.compiler_config.embed_resources
+                    == crate::EmbedResourcesKind::EmbedAllResources,
             );
         }
     }
@@ -271,6 +276,7 @@ pub fn run_import_passes(
 ) {
     infer_aliases_types::resolve_aliases(doc, diag);
     resolving::resolve_expressions(doc, type_loader, diag);
+    focus_handling::replace_forward_focus_bindings_with_focus_functions(doc, diag);
     check_expressions::check_expressions(doc, diag);
     purity_check::purity_check(doc, diag);
     check_rotation::check_rotation(doc, diag);

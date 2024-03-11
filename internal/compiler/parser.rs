@@ -12,9 +12,9 @@ This module has different sub modules with the actual parser functions
 
 */
 
-use crate::diagnostics::{BuildDiagnostics, SourceFile, Spanned};
+use crate::diagnostics::{BuildDiagnostics, SourceFile, SourceFileVersion, Spanned};
 pub use smol_str::SmolStr;
-use std::{convert::TryFrom, fmt::Display};
+use std::fmt::Display;
 
 mod document;
 mod element;
@@ -25,8 +25,10 @@ mod r#type;
 /// Each parser submodule would simply do `use super::prelude::*` to import typically used items
 mod prelude {
     #[cfg(test)]
+    pub use super::DefaultParser;
+    #[cfg(test)]
     pub use super::{syntax_nodes, SyntaxNode, SyntaxNodeVerify};
-    pub use super::{DefaultParser, Parser, SyntaxKind};
+    pub use super::{Parser, SyntaxKind};
     #[cfg(test)]
     pub use i_slint_parser_test_macro::parser_test;
 }
@@ -547,11 +549,24 @@ mod parser_trait {
 
         /// consume everything until reaching a token of this kind
         fn until(&mut self, kind: SyntaxKind) {
-            // FIXME! match {} () []
-            while {
-                let k = self.nth(0).kind();
-                k != kind && k != SyntaxKind::Eof
-            } {
+            let mut parens = 0;
+            let mut braces = 0;
+            let mut brackets = 0;
+            loop {
+                match self.nth(0).kind() {
+                    k @ _ if k == kind && parens == 0 && braces == 0 && brackets == 0 => break,
+                    SyntaxKind::Eof => break,
+                    SyntaxKind::LParent => parens += 1,
+                    SyntaxKind::LBrace => braces += 1,
+                    SyntaxKind::LBracket => brackets += 1,
+                    SyntaxKind::RParent if parens == 0 => break,
+                    SyntaxKind::RParent => parens -= 1,
+                    SyntaxKind::RBrace if braces == 0 => break,
+                    SyntaxKind::RBrace => braces -= 1,
+                    SyntaxKind::RBracket if brackets == 0 => break,
+                    SyntaxKind::RBracket => brackets -= 1,
+                    _ => {}
+                };
                 self.consume();
             }
             self.expect(kind);
@@ -761,6 +776,9 @@ impl SyntaxToken {
                 )
             })?;
         Some(SyntaxToken { token, source_file: self.source_file.clone() })
+    }
+    pub fn text(&self) -> &str {
+        self.token.text()
     }
 }
 
@@ -982,12 +1000,14 @@ pub fn parse_expression_as_bindingexpression(
 pub fn parse(
     source: String,
     path: Option<&std::path::Path>,
+    version: SourceFileVersion,
     build_diagnostics: &mut BuildDiagnostics,
 ) -> SyntaxNode {
     let mut p = DefaultParser::new(&source, build_diagnostics);
     p.source_file = std::rc::Rc::new(crate::diagnostics::SourceFileInner::new(
-        path.map(|p| p.to_path_buf()).unwrap_or_default(),
+        path.map(|p| crate::pathutils::clean_path(p)).unwrap_or_default(),
         source,
+        version,
     ));
     document::parse_document(&mut p);
     SyntaxNode {
@@ -1000,10 +1020,11 @@ pub fn parse_file<P: AsRef<std::path::Path>>(
     path: P,
     build_diagnostics: &mut BuildDiagnostics,
 ) -> Option<SyntaxNode> {
-    let source = crate::diagnostics::load_from_path(path.as_ref())
+    let path = crate::pathutils::clean_path(path.as_ref());
+    let source = crate::diagnostics::load_from_path(&path)
         .map_err(|d| build_diagnostics.push_internal_error(d))
         .ok()?;
-    Some(parse(source, Some(path.as_ref()), build_diagnostics))
+    Some(parse(source, Some(path.as_ref()), None, build_diagnostics))
 }
 
 pub fn parse_tokens(

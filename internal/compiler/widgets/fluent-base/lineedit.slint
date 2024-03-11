@@ -1,80 +1,86 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
 
-import { Typography, Palette } from "styling.slint";
+import { FluentFontSettings, FluentPalette } from "styling.slint";
+import { LineEditBase} from "../common/lineedit-base.slint";
 
 export component LineEdit {
-    callback accepted(string /* text */);
-    callback edited(string /* text */);
+    in property <bool> enabled <=> i-base.enabled;
+    in property <InputType> input-type <=> i-base.input-type;
+    in property <TextHorizontalAlignment> horizontal-alignment <=> i-base.horizontal-alignment;
+    in property <bool> read-only <=> i-base.read-only;
+    in property <length> font-size <=> i-base.font-size;
+    in property <string> placeholder-text <=> i-base.placeholder-text;
+    out property <bool> has-focus <=> i-base.has-focus;
+    in-out property <string> text <=> i-base.text;
 
-    in property <bool> enabled <=> i-text-input.enabled;
-    in property <InputType> input-type <=> i-text-input.input-type;
-    in property <TextHorizontalAlignment> horizontal-alignment <=> i-text-input.horizontal-alignment;
-    in property <bool> read-only <=> i-text-input.read-only;
-    in property <length> font-size <=> i-text-input.font-size;
-    in property <string> placeholder-text <=> i-placeholder.text;
-    out property <bool> has-focus <=> i-text-input.has-focus;
-    in-out property <string> text <=> i-text-input.text;
+    callback accepted <=> i-base.accepted;
+    callback edited <=> i-base.edited;
+
+    public function set-selection-offsets(start: int, end: int) {
+        i-base.set-selection-offsets(start, end);
+    }
+
+    public function select-all() {
+        i-base.select-all();
+    }
+
+    public function clear-selection() {
+        i-base.clear-selection();
+    }
+
+    public function cut() {
+        i-base.cut();
+    }
+
+    public function copy() {
+        i-base.copy();
+    }
+
+    public function paste() {
+        i-base.paste();
+    }
 
     vertical-stretch: 0;
     horizontal-stretch: 1;
-    min-width: max(160px, i-layout.min-height);
+    min-width: max(160px, i-layout.min-width);
     min-height: max(32px, i-layout.min-height);
-    forward-focus: i-text-input;
+    forward-focus: i-base;
+
+    states [
+        disabled when !root.enabled : {
+            i-background.background: FluentPalette.control-disabled;
+            i-background.border-color: FluentPalette.border;
+            i-base.text-color: FluentPalette.text-disabled;
+            i-base.selection-foreground-color: FluentPalette.text-accent-foreground-disabled;
+            i-base.placeholder-color: FluentPalette.text-disabled;
+        }
+        focused when root.has-focus : {
+            i-background.background: FluentPalette.control-input-active;
+            i-background.border-color: FluentPalette.border;
+            i-focus-border.background: FluentPalette.accent-background;
+            i-base.placeholder-color: FluentPalette.text-tertiary;
+        }
+    ]
 
     i-background := Rectangle {
         border-radius: 4px;
-        background: Palette.control-default;
+        background: FluentPalette.control-background;
         border-width: 1px;
-        border-color: Palette.text-control-border;
+        border-color: FluentPalette.text-control-border;
 
         i-layout := HorizontalLayout {
             padding-left: 12px;
             padding-right: 12px;
 
-            Rectangle {
-                clip: true;
-
-                i-placeholder := Text {
-                    width: 100%;
-                    height: 100%;
-                    color: Palette.text-secondary;
-                    font-size: Typography.body.font-size;
-                    font-weight: Typography.body.font-weight;
-                    visible: root.text == "";
-                    vertical-alignment: center;
-                }
-
-                i-text-input := TextInput {
-                    property <length> computed_x;
-                    property <length> padding-outer: i-layout.padding-left + i-layout.padding-right;
-
-                    x: min(0px, max(parent.width - self.width, self.computed_x));
-                    width: max(parent.width, self.preferred-width);
-                    height: 100%;
-                    color: Palette.text-primary;
-                    vertical-alignment: center;
-                    font-size: Typography.body.font-size;
-                    font-weight: Typography.body.font-weight;
-                    selection-background-color: Palette.accent-selected-text;
-                    selection-foreground-color: self.color;
-
-                    accepted => {
-                        root.accepted(self.text);
-                    }
-
-                    edited => {
-                        root.edited(self.text);
-                    }
-
-                    cursor-position-changed(cpos) => {
-                        if (cpos.x + self.computed_x < self.padding-outer) {
-                            self.computed_x = - cpos.x + self.padding-outer;
-                        } else if (cpos.x + self.computed_x > parent.width - self.padding-outer) {
-                            self.computed_x = parent.width - cpos.x - self.padding-outer;
-                        }
-                    }
-                }
+            i-base := LineEditBase {
+                font-size: FluentFontSettings.body.font-size;
+                font-weight: FluentFontSettings.body.font-weight;
+                selection-background-color: FluentPalette.selection-background;
+                selection-foreground-color: FluentPalette.accent-foreground;
+                text-color: FluentPalette.foreground;
+                placeholder-color: FluentPalette.text-secondary;
+                margin: i-layout.padding-left + i-layout.padding-right;
             }
         }
 
@@ -85,39 +91,4 @@ export component LineEdit {
             height: 2px;
         }
     }
-
-    public function select-all() {
-        i-text-input.select-all();
-    }
-
-    public function clear-selection() {
-        i-text-input.clear-selection();
-    }
-
-    public function cut() {
-        i-text-input.cut();
-    }
-
-    public function copy() {
-        i-text-input.copy();
-    }
-
-    public function paste() {
-        i-text-input.paste();
-    }
-
-    states [
-        disabled when !root.enabled : {
-            i-background.background: Palette.control-disabled;
-            i-background.border-color: Palette.control-stroke;
-            i-text-input.color: Palette.text-disabled;
-            i-placeholder.color: Palette.text-disabled;
-        }
-        focused when root.has-focus : {
-            i-background.background: Palette.control-input-active;
-            i-background.border-color: Palette.control-stroke;
-            i-focus-border.background: Palette.accent-default;
-            i-placeholder.color: Palette.text-tertiary;
-        }
-    ]
 }

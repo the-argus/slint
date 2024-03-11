@@ -104,10 +104,6 @@ type ActualStandardButtonKind = Option<StandardButtonKind>;
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
 pub struct NativeButton {
-    pub x: Property<LogicalLength>,
-    pub y: Property<LogicalLength>,
-    pub width: Property<LogicalLength>,
-    pub height: Property<LogicalLength>,
     pub text: Property<SharedString>,
     pub icon: Property<i_slint_core::graphics::Image>,
     pub pressed: Property<bool>,
@@ -118,6 +114,7 @@ pub struct NativeButton {
     pub has_focus: Property<bool>,
     pub clicked: Callback<VoidArg>,
     pub enabled: Property<bool>,
+    pub colorize_icon: Property<bool>,
     pub standard_button_kind: Property<StandardButtonKind>,
     pub is_standard_button: Property<bool>,
     widget_ptr: std::cell::Cell<SlintTypeErasedWidgetPtr>,
@@ -200,13 +197,6 @@ impl Item for NativeButton {
         }})
     }
 
-    fn geometry(self: Pin<&Self>) -> LogicalRect {
-        LogicalRect::new(
-            LogicalPoint::from_lengths(self.x(), self.y()),
-            LogicalSize::from_lengths(self.width(), self.height()),
-        )
-    }
-
     fn layout_info(
         self: Pin<&Self>,
         orientation: Orientation,
@@ -236,13 +226,11 @@ impl Item for NativeButton {
             }
             return qApp->style()->sizeFromContents(QStyle::CT_PushButton, &option, option.rect.size(), widget_ptr);
         });
-        LayoutInfo {
-            min: match orientation {
-                Orientation::Horizontal => size.width as f32,
-                Orientation::Vertical => size.height as f32,
-            },
-            ..LayoutInfo::default()
-        }
+        let min = match orientation {
+            Orientation::Horizontal => size.width as f32,
+            Orientation::Vertical => size.height as f32,
+        };
+        LayoutInfo { min, preferred: min, ..LayoutInfo::default() }
     }
 
     fn input_event_filter_before_children(
@@ -259,7 +247,7 @@ impl Item for NativeButton {
         self: Pin<&Self>,
         event: MouseEvent,
         _window_adapter: &Rc<dyn WindowAdapter>,
-        _self_rc: &i_slint_core::items::ItemRc,
+        self_rc: &i_slint_core::items::ItemRc,
     ) -> InputEventResult {
         if matches!(event, MouseEvent::Exit) {
             Self::FIELD_OFFSETS.has_hover.apply_pin(self).set(false);
@@ -284,12 +272,8 @@ impl Item for NativeButton {
             MouseEvent::Wheel { .. } => return InputEventResult::EventIgnored,
         });
         if let MouseEvent::Released { position, .. } = event {
-            if LogicalRect::new(
-                LogicalPoint::default(),
-                LogicalSize::from_lengths(self.width(), self.height()),
-            )
-            .contains(position)
-                && was_pressed
+            let geo = self_rc.geometry();
+            if LogicalRect::new(LogicalPoint::default(), geo.size).contains(position) && was_pressed
             {
                 self.activate();
             }
@@ -349,6 +333,7 @@ impl Item for NativeButton {
         let has_focus = this.has_focus();
         let has_hover = this.has_hover();
         let primary = this.primary();
+        let colorize_icon = this.colorize_icon();
 
         cpp!(unsafe [
             painter as "QPainterPtr*",
@@ -362,17 +347,45 @@ impl Item for NativeButton {
             has_focus as "bool",
             has_hover as "bool",
             primary as "bool",
+            colorize_icon as "bool",
             dpr as "float",
             initial_state as "int"
         ] {
+            class ColorizedIconEngine : public QIconEngine
+            {
+            public:
+                ColorizedIconEngine(const QIcon &icon, const QColor &color) : m_icon(icon), m_color(color) { }
+
+                QPixmap pixmap(const QSize &size, QIcon::Mode mode, QIcon::State state) override
+                {
+                    QPixmap iconPixmap = m_icon.pixmap(size, mode, state);
+                    if (!iconPixmap.isNull()) {
+                        QPainter colorizePainter(&iconPixmap);
+                        colorizePainter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+                        colorizePainter.fillRect(iconPixmap.rect(), m_color);
+                    }
+                    return iconPixmap;
+                }
+
+                void paint(QPainter *painter, const QRect &rect, QIcon::Mode mode, QIcon::State state) override
+                {
+                    painter->drawPixmap(rect, this->pixmap(rect.size(), mode, state));
+                }
+
+                QIconEngine *clone() const override { return new ColorizedIconEngine(m_icon, m_color); }
+
+            private:
+                QIcon m_icon;
+                QColor m_color;
+            };
+
             QStyleOptionButton option;
-            option.initFrom(widget);
+            option.styleObject = widget;
             option.state |= QStyle::State(initial_state);
             option.text = std::move(text);
-            option.icon = icon;
-            auto iconSize = qApp->style()->pixelMetric(QStyle::PM_ButtonIconSize, 0, nullptr);
-            option.iconSize = QSize(iconSize, iconSize);
-            option.rect = QRect(QPoint(), size / dpr);
+
+            QColor iconColor = qApp->palette().color(QPalette::ButtonText).rgba();
+
             if (down) {
                 option.state |= QStyle::State_Sunken;
             } else {
@@ -385,6 +398,7 @@ impl Item for NativeButton {
                 option.state |= QStyle::State_Enabled;
             } else {
                 option.palette.setCurrentColorGroup(QPalette::Disabled);
+                iconColor = qApp->palette().color(QPalette::Disabled, QPalette::ButtonText).rgba();
             }
             if (has_focus) {
                 option.state |= QStyle::State_HasFocus | QStyle::State_KeyboardFocusChange | QStyle::State_Item;
@@ -395,6 +409,15 @@ impl Item for NativeButton {
             if (primary) {
                 option.features |= QStyleOptionButton::DefaultButton;
             }
+            if (colorize_icon) {
+                option.icon = QIcon(new ColorizedIconEngine(icon, iconColor));
+            } else {
+                option.icon = icon;
+            }
+            auto iconSize = qApp->style()->pixelMetric(QStyle::PM_ButtonIconSize, 0, nullptr);
+            option.iconSize = QSize(iconSize, iconSize);
+            option.rect = QRect(QPoint(), size / dpr);
+
             qApp->style()->drawControl(QStyle::CE_PushButton, &option, painter->get(), widget);
         });
     }

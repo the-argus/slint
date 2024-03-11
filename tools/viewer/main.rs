@@ -9,29 +9,36 @@ use slint_interpreter::{
     ComponentDefinition, ComponentHandle, ComponentInstance, SharedString, Value,
 };
 use std::collections::HashMap;
+use std::io::{BufReader, BufWriter};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
+use itertools::Itertools;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Clone, clap::Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    #[arg(short = 'I', name = "include path for other .slint files", number_of_values = 1, action)]
+    /// Include path for other .slint files or images
+    #[arg(short = 'I', value_name = "include path", number_of_values = 1, action)]
     include_paths: Vec<std::path::PathBuf>,
 
+    /// Specify Library location of the '@library' in the form 'library=/path/to/library'
+    #[arg(short = 'L', value_name = "library=path", number_of_values = 1, action)]
+    library_paths: Vec<String>,
+
     /// The .slint file to load ('-' for stdin)
-    #[arg(name = "path to .slint file", action)]
+    #[arg(name = "path", action)]
     path: std::path::PathBuf,
 
     /// The style name ('native' or 'fluent')
-    #[arg(long, name = "style name", action)]
+    #[arg(long, value_name = "style name", action)]
     style: Option<String>,
 
     /// The rendering backend
-    #[arg(long, name = "backend", action)]
+    #[arg(long, value_name = "backend", action)]
     backend: Option<String>,
 
     /// Automatically watch the file system, and reload when it changes
@@ -39,11 +46,11 @@ struct Cli {
     auto_reload: bool,
 
     /// Load properties from a json file ('-' for stdin)
-    #[arg(long, name = "load data file", action)]
+    #[arg(long, value_name = "json file", action)]
     load_data: Option<std::path::PathBuf>,
 
     /// Store properties values in a json file at exit ('-' for stdout)
-    #[arg(long, name = "save data file", action)]
+    #[arg(long, value_name = "json file", action)]
     save_data: Option<std::path::PathBuf>,
 
     /// Specify callbacks handler.
@@ -148,7 +155,7 @@ fn main() -> Result<()> {
         if data_path == std::path::Path::new("-") {
             serde_json::to_writer_pretty(std::io::stdout(), &obj)?;
         } else {
-            serde_json::to_writer_pretty(std::fs::File::create(data_path)?, &obj)?;
+            serde_json::to_writer_pretty(BufWriter::new(std::fs::File::create(data_path)?), &obj)?;
         }
     }
 
@@ -165,6 +172,12 @@ fn init_compiler(
         compiler.set_translation_domain(domain);
     }
     compiler.set_include_paths(args.include_paths.clone());
+    compiler.set_library_paths(
+        args.library_paths
+            .iter()
+            .filter_map(|entry| entry.split('=').collect_tuple().map(|(k, v)| (k.into(), v.into())))
+            .collect(),
+    );
     if let Some(style) = &args.style {
         compiler.set_style(style.clone());
     }
@@ -285,7 +298,7 @@ fn load_data(
     let json: serde_json::Value = if data_path == std::path::Path::new("-") {
         serde_json::from_reader(std::io::stdin())?
     } else {
-        serde_json::from_reader(std::fs::File::open(data_path)?)?
+        serde_json::from_reader(BufReader::new(std::fs::File::open(data_path)?))?
     };
 
     let types = c.properties_and_callbacks().collect::<HashMap<_, _>>();

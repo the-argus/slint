@@ -1,3 +1,4 @@
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT -->
 # Overview
 
 The following sections explain how to integrate your `.slint` designs into your
@@ -22,7 +23,7 @@ handling callbacks to react to events triggered by the user.
 ## Compiled `.slint` Designs
 
 The provided CMake integration makes it easy to compile your Slint sources:
-The `slint_target_sources` CMake command makes the translation automatic. The
+The [`slint_target_sources` CMake command](cmake_reference.md#slint_target_sources) makes the translation automatic. The
 [generated code](generated_code.md) has an API to set and get property values,
 etc. This API uses types from the {ref}`slint <namespace_slint>` namespace, for
 example {cpp:class}`slint::SharedString` or {cpp:class}`slint::Color`.
@@ -53,7 +54,7 @@ models.
 
 More complex user interfaces commonly consume data in the form of an abstract
 data model, that is used with <a href="../slint/src/reference/repetitions.html">`for` - `in`</a>
-repetitions or <a href="../slint/src/builtins/widgets.html#listview">`ListView`</a> elements in the
+repetitions or <a href="../slint/src/language/widgets/listview">`ListView`</a> elements in the
 `.slint` language. All models in C++ with the interpreter API are sub-classes
 of the {cpp:class}`slint::Model` where the template parameter is
 {cpp:class}`slint::interpreter::Value`. To provide your own data model, you can

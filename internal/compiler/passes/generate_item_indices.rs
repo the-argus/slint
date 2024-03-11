@@ -44,7 +44,7 @@ pub fn generate_item_indices(component: &Rc<Component>) {
 }
 
 struct Helper {
-    current_item_index: usize,
+    current_item_index: u32,
 }
 impl crate::generator::ItemTreeBuilder for Helper {
     // true when not at the root
@@ -69,6 +69,7 @@ impl crate::generator::ItemTreeBuilder for Helper {
     fn push_component_placeholder_item(
         &mut self,
         item: &crate::object_tree::ElementRc,
+        _container_count: u32,
         _parent_index: u32,
         component_state: &Self::SubComponentState,
     ) {

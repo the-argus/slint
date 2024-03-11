@@ -3,9 +3,10 @@
 
 // ANCHOR: main
 // main.js
-require("slint-ui");
-let ui = require("./memory.slint");
+import * as slint from "slint-ui";
+
+let ui = slint.loadFile("./ui/appwindow.slint");
 let mainWindow = new ui.MainWindow();
-mainWindow.run();
+await mainWindow.run();
 
 // ANCHOR_END: main

@@ -49,9 +49,10 @@ fn symlink_files_in_dir<S: AsRef<Path>, T: AsRef<Path>, TS: AsRef<Path>>(
         let file_name = path.file_name().unwrap();
         let symlink_source = target_to_source.as_ref().to_path_buf().join(&file_name);
         let symlink_target = target.as_ref().to_path_buf().join(path.file_name().unwrap());
-        if path.is_file() {
+        let filetype = entry.file_type().context("Cannot determine file type")?;
+        if filetype.is_file() {
             symlink_file(symlink_source, symlink_target).context("Could not symlink file")?;
-        } else if path.is_dir() {
+        } else if filetype.is_dir() {
             symlink_dir(symlink_source, symlink_target).context("Could not symlink directory")?;
         }
     }
@@ -77,11 +78,6 @@ pub fn generate(show_warnings: bool) -> Result<(), Box<dyn std::error::Error>> {
     .context("Error creating symlinks from docs source to docs build dir")?;
 
     symlink_file(
-        ["..", "..", "docs", "debugging_techniques.md"].iter().collect::<PathBuf>(),
-        docs_build_dir.join("debugging_techniques.md"),
-    )?;
-
-    symlink_file(
         ["..", "..", "api", "cpp", "README.md"].iter().collect::<PathBuf>(),
         docs_build_dir.join("README.md"),
     )?;
@@ -90,9 +86,10 @@ pub fn generate(show_warnings: bool) -> Result<(), Box<dyn std::error::Error>> {
     let enabled_features = cbindgen::EnabledFeatures {
         interpreter: true,
         backend_qt: false,
-        std: true,
+        freestanding: false,
         renderer_software: true,
         renderer_skia: true,
+        experimental: false,
     };
     cbindgen::gen_all(&root, &generated_headers_dir, enabled_features)?;
 
