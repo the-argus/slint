@@ -15,6 +15,8 @@ use i_slint_core::renderer::Renderer;
 use i_slint_core::window::ffi::WindowAdapterRcOpaque;
 use i_slint_core::window::{WindowAdapter, WindowProperties};
 use i_slint_core::SharedString;
+use i_slint_renderer_skia::SkiaRenderer;
+use i_slint_renderer_skia::vulkan_surface::VulkanSurface;
 
 type WindowAdapterUserData = *mut c_void;
 
@@ -557,13 +559,16 @@ pub mod skia {
         r: SkiaRendererOpaque,
     ) -> u64 {
         let r = &*(r as *const SkiaRenderer);
-        let vulkan_surface = r
+        unsafe {
+            let vulkan_surface = r
             .surface()
             .unwrap()
+            .as_ref()
             .as_any()
             .downcast_ref::<VulkanSurface>()
             .expect("vulkan backend not in use");
-        return vulkan_surface.raw_vulkan_instance_handle();
+            return vulkan_surface.raw_vulkan_handles().instance;
+        }
     }
 
     #[no_mangle]
@@ -571,27 +576,67 @@ pub mod skia {
         r: SkiaRendererOpaque,
     ) -> u64 {
         let r = &*(r as *const SkiaRenderer);
-        let vulkan_surface = r
-            .surface()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<VulkanSurface>()
-            .expect("vulkan backend not in use");
-        return vulkan_surface.raw_vulkan_physical_device_handle();
+        unsafe {
+            let vulkan_surface = r
+                .surface()
+                .unwrap()
+                .as_ref()
+                .as_any()
+                .downcast_ref::<VulkanSurface>()
+                .expect("vulkan backend not in use");
+            return vulkan_surface.raw_vulkan_handles().physical_device;
+        }
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn slint_skia_renderer_raw_vulkan_current_frame_handle(
+    pub unsafe extern "C" fn slint_skia_renderer_raw_vulkan_device_handle(
         r: SkiaRendererOpaque,
     ) -> u64 {
         let r = &*(r as *const SkiaRenderer);
-        let vulkan_surface = r
-            .surface()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<VulkanSurface>()
-            .expect("vulkan backend not in use");
-        return vulkan_surface.current_raw_offscreen_vulkan_image_handle();
+        unsafe {
+            let vulkan_surface = r
+                .surface()
+                .unwrap()
+                .as_ref()
+                .as_any()
+                .downcast_ref::<VulkanSurface>()
+                .expect("vulkan backend not in use");
+            return vulkan_surface.raw_vulkan_handles().device;
+        }
+    }
+    
+    #[no_mangle]
+    pub unsafe extern "C" fn slint_skia_renderer_raw_vulkan_surface_handle(
+        r: SkiaRendererOpaque,
+    ) -> u64 {
+        let r = &*(r as *const SkiaRenderer);
+        unsafe {
+            let vulkan_surface = r
+                .surface()
+                .unwrap()
+                .as_ref()
+                .as_any()
+                .downcast_ref::<VulkanSurface>()
+                .expect("vulkan backend not in use");
+            return vulkan_surface.raw_vulkan_handles().surface;
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn slint_skia_renderer_raw_vulkan_queue_handle(
+        r: SkiaRendererOpaque,
+    ) -> u64 {
+        let r = &*(r as *const SkiaRenderer);
+        unsafe {
+            let vulkan_surface = r
+                .surface()
+                .unwrap()
+                .as_ref()
+                .as_any()
+                .downcast_ref::<VulkanSurface>()
+                .expect("vulkan backend not in use");
+            return vulkan_surface.raw_vulkan_handles().queue;
+        }
     }
 
     #[no_mangle]

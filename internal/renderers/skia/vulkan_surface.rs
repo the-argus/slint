@@ -20,6 +20,16 @@ use vulkano::{sync, Handle, Validated, VulkanError, VulkanLibrary, VulkanObject}
 use raw_window_handle::HasRawDisplayHandle;
 use raw_window_handle::HasRawWindowHandle;
 
+/// Raw, untyped pointers to vulkan resources. Used to pass vulkan details
+/// over FFI.
+pub struct RawVulkanHandles {
+    pub instance: u64,
+    pub physical_device: u64,
+    pub device: u64,
+    pub surface: u64,
+    pub queue: u64,
+}
+
 /// This surface renders into the given window using Vulkan.
 pub struct VulkanSurface {
     gr_context: RefCell<skia_safe::gpu::DirectContext>,
@@ -30,9 +40,15 @@ pub struct VulkanSurface {
     swapchain: RefCell<Arc<Swapchain>>,
     swapchain_images: RefCell<Vec<Arc<Image>>>,
     swapchain_image_views: RefCell<Vec<Arc<ImageView>>>,
+    raw_vulkan_handles: RawVulkanHandles,
 }
 
 impl VulkanSurface {
+    /// Get untyped pointers to vulkan resources
+    pub fn raw_vulkan_handles(&self) -> &RawVulkanHandles {
+        &self.raw_vulkan_handles
+    }
+
     /// Creates a Skia Vulkan rendering surface from the given Vukano device, queue family index, surface,
     /// and size.
     pub fn from_surface(
@@ -124,12 +140,15 @@ impl VulkanSurface {
             }
         };
 
+        let devicehandle = device.handle().as_raw();
+        let queuehandle = queue.handle().as_raw();
+
         let backend_context = unsafe {
             skia_safe::gpu::vk::BackendContext::new(
                 instance.handle().as_raw() as _,
                 physical_device.handle().as_raw() as _,
-                device.handle().as_raw() as _,
-                (queue.handle().as_raw() as _, queue.id_within_family() as _),
+                devicehandle as _,
+                (queuehandle as _, queue.id_within_family() as _),
                 &get_proc,
             )
         };
@@ -148,6 +167,13 @@ impl VulkanSurface {
             swapchain: RefCell::new(swapchain),
             swapchain_images: RefCell::new(swapchain_images),
             swapchain_image_views: RefCell::new(swapchain_image_views),
+            raw_vulkan_handles: RawVulkanHandles {
+                instance: instance.handle().as_raw(),
+                physical_device: physical_device.handle().as_raw(),
+                device: devicehandle,
+                surface: surface.handle().as_raw(),
+                queue: queuehandle,
+            },
         })
     }
 

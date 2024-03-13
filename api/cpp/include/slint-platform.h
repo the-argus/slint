@@ -775,20 +775,30 @@ public:
         inner = cbindgen_private::slint_skia_renderer_new(window_handle.inner, initial_size);
     }
 
-    size_t instance_handle() const
+    uint64_t instance_handle() const
     {
         return cbindgen_private::slint_skia_renderer_raw_vulkan_instance_handle(inner);
     }
 
-    size_t physical_device_handle() const
+    uint64_t physical_device_handle() const
     {
         return cbindgen_private::slint_skia_renderer_raw_vulkan_physical_device_handle(inner);
     }
 
-    /// returns a VkImage handle
-    size_t current_offscreen_image() const
+    /// returns a VkDevice handle
+    uint64_t device_handle() const
     {
-        return cbindgen_private::slint_skia_renderer_raw_vulkan_current_frame_handle(inner);
+        return cbindgen_private::slint_skia_renderer_raw_vulkan_device_handle(inner);
+    }
+
+    uint64_t surface_handle() const
+    {
+        return cbindgen_private::slint_skia_renderer_raw_vulkan_surface_handle(inner);
+    }
+
+    uint64_t queue_handle() const
+    {
+        return cbindgen_private::slint_skia_renderer_raw_vulkan_queue_handle(inner);
     }
 
     /// Renders the scene into the window provided to the SkiaRenderer's constructor.

@@ -6,6 +6,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
+use std::ptr::NonNull;
 
 use i_slint_core::api::{
     GraphicsAPI, PhysicalSize as PhysicalWindowSize, RenderingNotifier, RenderingState,
@@ -163,8 +164,8 @@ impl SkiaRenderer {
         Ok(Self::new_with_surface(create_default_surface(window_handle, display_handle, size)?))
     }
 
-    pub fn surface(&self) -> Option<&dyn Surface> {
-        Some(self.surface.borrow().as_ref()?.as_ref())
+    pub fn surface(&self) -> Option<NonNull<dyn Surface>> {
+        Some(unsafe { NonNull::new_unchecked((self.surface.borrow_mut().as_mut()?.as_mut()) as *mut dyn Surface) })
     }
 
     /// Creates a new renderer with the given surface trait implementation.
