@@ -941,8 +941,22 @@ impl WindowAdapter for WinitWindowAdapter {
         if m != self.fullscreen.get() {
             if m {
                 if winit_window_or_none.fullscreen().is_none() {
-                    winit_window_or_none
-                        .set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                    'setfullscreen: {
+                        if let Some(window) = winit_window_or_none.as_window() {
+                            if let Some(monitor) = window.available_monitors().next() {
+                                if let Some(mode) = monitor.video_modes().next() {
+                                    println!("Setting fullscreen for monitor and mode");
+                                    winit_window_or_none.set_fullscreen(Some(winit::window::Fullscreen::Exclusive(monitor, mode)));
+                                    break 'setfullscreen;
+                                }
+                                println!("No mode found in monitor.video_modes(), falling back to borderless fullscreen");
+                                break 'setfullscreen;
+                            }
+                            println!("No monitor found in window.available_monitors(), falling back to borderless fullscreen");
+                        }
+                        winit_window_or_none
+                            .set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                    }
                 }
             } else {
                 winit_window_or_none.set_fullscreen(None);
