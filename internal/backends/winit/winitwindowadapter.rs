@@ -946,7 +946,7 @@ impl WindowAdapter for WinitWindowAdapter {
                             if let Some(monitor) = window.available_monitors().next() {
                                 if let Some(mode) = monitor.video_modes().next() {
                                     println!("Setting fullscreen for monitor and mode");
-                                    winit_window_or_none.set_fullscreen(Some(winit::window::Fullscreen::Exclusive(monitor, mode)));
+                                    winit_window_or_none.set_fullscreen(Some(winit::window::Fullscreen::Exclusive(mode)));
                                     break 'setfullscreen;
                                 }
                                 println!("No mode found in monitor.video_modes(), falling back to borderless fullscreen");
