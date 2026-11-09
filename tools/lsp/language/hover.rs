@@ -15,6 +15,10 @@ use itertools::Itertools as _;
 use lsp_types::{Hover, HoverContents, MarkupContent};
 use std::rc::Rc;
 
+mod std_widget_docs {
+    include!(concat!(env!("OUT_DIR"), "/std_widget_docs.rs"));
+}
+
 pub fn get_tooltip(
     document_cache: &mut editor_preview::DocumentCache,
     token: SyntaxToken,
@@ -162,6 +166,237 @@ fn extract_documentation(declaration: &SyntaxNode) -> Option<String> {
     Some(result2)
 }
 
+<<<<<<< HEAD
+||||||| parent of 914ff893d0 (lsp: embed website docs for std widgets and show on hover)
+/// If the given token is a builtin type or the field of a builtin struct, return its documentation
+/// as a markdown string, or else None
+fn builtin_type_doc(token_info: &TokenInfo) -> Option<String> {
+    let doc = match token_info {
+        TokenInfo::Type(Type::Enumeration(e)) if e.node.is_none() => {
+            let (description, values) = builtin_enum_docs(&e.name)?;
+            let values =
+                values.iter().map(|(value, doc)| markdown_list_item(&format!("`{value}`"), doc));
+            make_header_followed_by_list(description, values)
+        }
+        TokenInfo::EnumerationValue(v) if v.enumeration.node.is_none() => {
+            let value = &v.enumeration.values[v.value];
+            builtin_enum_docs(&v.enumeration.name)?.1.into_iter().find(|(n, _)| n == value)?.1
+        }
+        TokenInfo::Type(Type::Struct(s)) => {
+            let (description, fields) = builtin_struct_docs(s)?;
+            let fields = fields.iter().map(|(field, doc)| {
+                let ty =
+                    s.fields.get(field.as_str()).map(|ty| format!(": {ty}")).unwrap_or_default();
+                let constant_to_string = |c: &ConstantExpression| match c {
+                    ConstantExpression::NumberLiteral(n, unit) => Some(format!("{n}{unit}")),
+                    ConstantExpression::BoolLiteral(b) => Some(b.to_string()),
+                    ConstantExpression::EnumerationValue(v) => {
+                        Some(format!("{}.{v}", v.enumeration.name))
+                    }
+                    _ => None,
+                };
+                let default = s
+                    .field_defaults
+                    .get(field.as_str())
+                    .and_then(constant_to_string)
+                    .map(|d| format!(" = {d}"))
+                    .unwrap_or_default();
+                markdown_list_item(&format!("`{field}{ty}{default}`"), doc)
+            });
+            make_header_followed_by_list(description, fields)
+        }
+        TokenInfo::StructField(s, field) => {
+            builtin_struct_docs(s)?.1.into_iter().find(|(n, _)| n == field)?.1
+        }
+        _ => return None,
+    };
+    (!doc.is_empty()).then_some(doc)
+}
+
+fn make_header_followed_by_list(header: String, mut items: impl Iterator<Item = String>) -> String {
+    let list = items.join("\n");
+    [header, list].into_iter().filter(|p| !p.is_empty()).join("\n\n")
+}
+
+fn markdown_list_item(label: &str, doc: &str) -> String {
+    if doc.is_empty() {
+        format!("- {label}")
+    } else {
+        format!("- {label}: {}", doc.lines().join("\n  "))
+    }
+}
+
+fn join_doc_lines(lines: &[&str]) -> String {
+    clean_builtin_doc(&lines.iter().map(|l| l.strip_prefix(' ').unwrap_or(l)).join("\n"))
+}
+
+/// If there is a builtin enum with the given enum_name, return its description and the
+/// name (in kebab-case) and the documentation of each of its values
+fn builtin_enum_docs(enum_name: &str) -> Option<(String, Vec<(String, String)>)> {
+    macro_rules! find_doc {
+        ($( $(#[doc = $enum_doc:literal])* $(#[non_exhaustive])? $vis:vis enum $Name:ident { $( $(#[doc = $value_doc:literal])* $Value:ident,)* })*) => {{
+            $(
+                if stringify!($Name) == enum_name {
+                    let values = vec![$((
+                        to_kebab_case(stringify!($Value).trim_start_matches("r#")),
+                        join_doc_lines(&[$($value_doc),*]),
+                    )),*];
+                    return Some((join_doc_lines(&[$($enum_doc),*]), values));
+                }
+            )*
+            None
+        }};
+    }
+    i_slint_common::for_each_enums!(find_doc)
+}
+
+/// If the given struct is a builtin struct, return its description and the name
+/// (in kebab-case) and the documentation of each of its fields
+fn builtin_struct_docs(s: &Struct) -> Option<(String, Vec<(String, String)>)> {
+    let StructName::Builtin(builtin) = &s.name else { return None };
+    let struct_name = builtin.slint_name()?;
+    macro_rules! find_doc {
+        ($(
+            $(#[doc = $struct_doc:literal])*
+            $(#[non_exhaustive])?
+            $(#[derive(Copy, Eq)])?
+            $vis:vis struct $Name:ident {
+                $( $(#[doc = $field_doc:literal])* $field:ident : $field_type:ty $(= $field_default:tt)?, )*
+            }
+        )*) => {{
+            $(
+                if stringify!($Name) == struct_name {
+                    let fields = vec![$((
+                        stringify!($field).replace('_', "-"),
+                        join_doc_lines(&[$($field_doc),*]),
+                    )),*];
+                    return Some((join_doc_lines(&[$($struct_doc),*]), fields));
+                }
+            )*
+            None
+        }};
+    }
+    i_slint_common::for_each_builtin_structs!(find_doc)
+}
+
+=======
+/// If the given token is a builtin type or the field of a builtin struct, return its documentation
+/// as a markdown string, or else None
+fn builtin_type_doc(token_info: &TokenInfo) -> Option<String> {
+    let doc = match token_info {
+        TokenInfo::Type(Type::Enumeration(e)) if e.node.is_none() => {
+            let (description, values) = builtin_enum_docs(&e.name)?;
+            let values =
+                values.iter().map(|(value, doc)| markdown_list_item(&format!("`{value}`"), doc));
+            make_header_followed_by_list(description, values)
+        }
+        TokenInfo::ElementType(ElementType::Component(c))
+            if c.node.as_ref().is_some_and(|n| n.source_file.path().is_builtin()) =>
+        {
+            std_widget_docs::std_widget_doc(&c.id)?.to_string()
+        }
+        TokenInfo::EnumerationValue(v) if v.enumeration.node.is_none() => {
+            let value = &v.enumeration.values[v.value];
+            builtin_enum_docs(&v.enumeration.name)?.1.into_iter().find(|(n, _)| n == value)?.1
+        }
+        TokenInfo::Type(Type::Struct(s)) => {
+            let (description, fields) = builtin_struct_docs(s)?;
+            let fields = fields.iter().map(|(field, doc)| {
+                let ty =
+                    s.fields.get(field.as_str()).map(|ty| format!(": {ty}")).unwrap_or_default();
+                let constant_to_string = |c: &ConstantExpression| match c {
+                    ConstantExpression::NumberLiteral(n, unit) => Some(format!("{n}{unit}")),
+                    ConstantExpression::BoolLiteral(b) => Some(b.to_string()),
+                    ConstantExpression::EnumerationValue(v) => {
+                        Some(format!("{}.{v}", v.enumeration.name))
+                    }
+                    _ => None,
+                };
+                let default = s
+                    .field_defaults
+                    .get(field.as_str())
+                    .and_then(constant_to_string)
+                    .map(|d| format!(" = {d}"))
+                    .unwrap_or_default();
+                markdown_list_item(&format!("`{field}{ty}{default}`"), doc)
+            });
+            make_header_followed_by_list(description, fields)
+        }
+        TokenInfo::StructField(s, field) => {
+            builtin_struct_docs(s)?.1.into_iter().find(|(n, _)| n == field)?.1
+        }
+        _ => return None,
+    };
+    (!doc.is_empty()).then_some(doc)
+}
+
+fn make_header_followed_by_list(header: String, mut items: impl Iterator<Item = String>) -> String {
+    let list = items.join("\n");
+    [header, list].into_iter().filter(|p| !p.is_empty()).join("\n\n")
+}
+
+fn markdown_list_item(label: &str, doc: &str) -> String {
+    if doc.is_empty() {
+        format!("- {label}")
+    } else {
+        format!("- {label}: {}", doc.lines().join("\n  "))
+    }
+}
+
+fn join_doc_lines(lines: &[&str]) -> String {
+    clean_builtin_doc(&lines.iter().map(|l| l.strip_prefix(' ').unwrap_or(l)).join("\n"))
+}
+
+/// If there is a builtin enum with the given enum_name, return its description and the
+/// name (in kebab-case) and the documentation of each of its values
+fn builtin_enum_docs(enum_name: &str) -> Option<(String, Vec<(String, String)>)> {
+    macro_rules! find_doc {
+        ($( $(#[doc = $enum_doc:literal])* $(#[non_exhaustive])? $vis:vis enum $Name:ident { $( $(#[doc = $value_doc:literal])* $Value:ident,)* })*) => {{
+            $(
+                if stringify!($Name) == enum_name {
+                    let values = vec![$((
+                        to_kebab_case(stringify!($Value).trim_start_matches("r#")),
+                        join_doc_lines(&[$($value_doc),*]),
+                    )),*];
+                    return Some((join_doc_lines(&[$($enum_doc),*]), values));
+                }
+            )*
+            None
+        }};
+    }
+    i_slint_common::for_each_enums!(find_doc)
+}
+
+/// If the given struct is a builtin struct, return its description and the name
+/// (in kebab-case) and the documentation of each of its fields
+fn builtin_struct_docs(s: &Struct) -> Option<(String, Vec<(String, String)>)> {
+    let StructName::Builtin(builtin) = &s.name else { return None };
+    let struct_name = builtin.slint_name()?;
+    macro_rules! find_doc {
+        ($(
+            $(#[doc = $struct_doc:literal])*
+            $(#[non_exhaustive])?
+            $(#[derive(Copy, Eq)])?
+            $vis:vis struct $Name:ident {
+                $( $(#[doc = $field_doc:literal])* $field:ident : $field_type:ty $(= $field_default:tt)?, )*
+            }
+        )*) => {{
+            $(
+                if stringify!($Name) == struct_name {
+                    let fields = vec![$((
+                        stringify!($field).replace('_', "-"),
+                        join_doc_lines(&[$($field_doc),*]),
+                    )),*];
+                    return Some((join_doc_lines(&[$($struct_doc),*]), fields));
+                }
+            )*
+            None
+        }};
+    }
+    i_slint_common::for_each_builtin_structs!(find_doc)
+}
+
+>>>>>>> 914ff893d0 (lsp: embed website docs for std widgets and show on hover)
 fn from_property_in_element(
     element: &ElementRc,
     name: &str,
@@ -363,6 +598,84 @@ mod tests {
     use super::*;
 
     use i_slint_compiler::parser::TextSize;
+
+    /// Given the std_widget_docs, which is a module generated from the website docs,
+    /// check to make sure the parsed properties defaults, names, visibility, etc. match
+    /// the actual declarations
+    #[test]
+    fn test_std_widget_docs_matches_slint_decls() {
+        let slint_source = r#"import { Button } from "std-widgets.slint";"#;
+        let (document_cache, _, _) =
+            crate::language::test::loaded_document_cache(slint_source.into());
+        let std_widgets = document_cache
+            .all_documents()
+            .find(|doc| {
+                doc.node.as_ref().is_some_and(|n| {
+                    let path = n.source_file.path();
+                    path.is_builtin() && path.file_name() == Some("std-widgets.slint")
+                })
+            })
+            .unwrap();
+
+        let mut errors = Vec::new();
+        for (exported_name, exported_component_or_type) in std_widgets.exports.iter() {
+            let name = exported_name.as_str();
+            let itertools::Either::Left(component) = exported_component_or_type else { continue };
+            if component.id != name {
+                errors.push(format!("{name} is exported as {}", component.id));
+            }
+            if std_widget_docs::std_widget_doc(name).is_none() {
+                errors.push(format!("{name} has no reference page"));
+            }
+        }
+
+        for (widget, child, properties) in std_widget_docs::STD_WIDGET_PROPERTIES {
+            let Some(itertools::Either::Left(component)) = std_widgets.exports.find(widget) else {
+                errors.push(format!("{widget} is not a std-widgets export"));
+                continue;
+            };
+            let name = match child {
+                Some(child) => format!("{widget}.{child}"),
+                None => widget.to_string(),
+            };
+            let element_type = match child {
+                None => ElementType::Component(component),
+                // Tab is a child of TabWidget, RadioButton is a child of RadioGroup
+                Some(child) => {
+                    let base_type = component.root_element.borrow().base_type.clone();
+                    let ElementType::Builtin(parent) = base_type else {
+                        errors.push(format!("{widget} doesn't inherit a builtin element"));
+                        continue;
+                    };
+                    let Some(child_type) = parent.additional_accepted_child_types.get(*child)
+                    else {
+                        errors.push(format!("{widget} doesn't accept {child} as a child"));
+                        continue;
+                    };
+                    child_type.clone().into()
+                }
+            };
+            for (property_name, type_name, visibility) in *properties {
+                let declaration = element_type.lookup_property(
+                    property_name,
+                    i_slint_compiler::element_type::PropertyLookupMode::FromOutside,
+                );
+                let documented = format!("{visibility} property <{type_name}> {property_name}");
+                let declared = format!(
+                    "{} property <{}> {property_name}",
+                    declaration.property_visibility, declaration.property_type
+                );
+                if declaration.property_type == Type::Invalid {
+                    errors.push(format!("{name}.{property_name} is documented but doesn't exist"));
+                } else if documented != declared {
+                    errors.push(format!(
+                        "{name}: documented as `{documented}`, declared as `{declared}`"
+                    ));
+                }
+            }
+        }
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
+    }
 
     #[test]
     fn test_tooltip_struct_field_and_model_data() {
@@ -595,6 +908,10 @@ export component Test { // not docs
             get_tooltip(&mut dc, find_tk("\"assets\\\\windows-test.png\"", 15.into())),
             &format!("![{target_path}]({target_path})"),
         );
+
+        let std_widget_tooltip = get_tooltip(&mut dc, find_tk("StandardTableView {", 0.into()));
+        assert_tooltip_contains(std_widget_tooltip.clone(), "component StandardTableView");
+        assert_tooltip_contains(std_widget_tooltip, "## Properties");
 
         // enums
         assert_tooltip(
