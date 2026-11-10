@@ -32,7 +32,7 @@ a time.
 ## Properties
 
 ### current-index
-<SlintProperty typeName="int" propName="current-index" defaultValue="0">
+<SlintProperty typeName="int" propName="current-index" defaultValue="0" propertyVisibility="in-out">
 The index of the currently visible tab.
 
 ```slint "current-index: 1;"
@@ -51,7 +51,7 @@ TabWidget {
 
 
 ### orientation
-<SlintProperty typeName="enum" enumName="Orientation" propName="orientation" defaultValue="horizontal">
+<SlintProperty typeName="enum" enumName="Orientation" propName="orientation" defaultValue="horizontal" propertyVisibility="constexpr">
 The orientation of the tab bar.
 When set to `vertical`, the tab bar is placed to the left of the content.
 The property must be constant.

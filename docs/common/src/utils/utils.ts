@@ -40,7 +40,12 @@ export type KnownType =
     | "string"
     | "struct";
 
-export type PropertyVisibility = "private" | "in" | "out" | "in-out";
+export type PropertyVisibility =
+    | "private"
+    | "in"
+    | "out"
+    | "in-out"
+    | "constexpr";
 
 export interface TypeInfo {
     href: string;
